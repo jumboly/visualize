@@ -61,6 +61,11 @@ export class NetworkView {
     this.drawNodes();
   }
 
+  /** 表示範囲を変える（一部を拡大して説明するため） */
+  setViewBox(vb: { x: number; y: number; w: number; h: number }): void {
+    this.svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+  }
+
   layer(name: LayerName): SVGGElement {
     return this.layers.get(name)!;
   }

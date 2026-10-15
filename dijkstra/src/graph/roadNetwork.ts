@@ -19,6 +19,9 @@ export const RAIL_Y = 800;
 export const EXPRESS_Y = 1000;
 /** 線路を渡れる列（踏切） */
 const CROSSINGS = new Set([5, 9, 18, 21]);
+/** 北西の碁盤目の一方通行（行 j → 向き、列 i → 向き） */
+const ONEWAY_ROWS: Record<number, 'E' | 'W'> = { 1: 'W', 4: 'E', 5: 'W' };
+const ONEWAY_COLS: Record<number, 'N' | 'S'> = { 3: 'S', 8: 'N' };
 /** 公園（この範囲の内側の道は遊歩道） */
 const PARK = { i0: 14, i1: 16, j0: 3, j1: 5 };
 
@@ -108,17 +111,19 @@ export function roadNetwork(): RoadNetwork {
       const right = grid.get(key(i + 1, j));
       if (right !== undefined) {
         const c = classify(i, j, i + 1, j);
-        // 北西の4条通りは東向きの一方通行
-        const oneway = west(i) && j === 4 && c.cls === 'local';
-        add(a, right, c.cls, c.width, { oneway });
+        // 北西の碁盤目には東西の一方通行がある（1・5条は西向き、4条は東向き）
+        const dir = west(i) && c.cls === 'local' ? ONEWAY_ROWS[j] : undefined;
+        if (dir === 'W') add(right, a, c.cls, c.width, { oneway: true });
+        else add(a, right, c.cls, c.width, { oneway: dir === 'E' });
       }
       const down = grid.get(key(i, j + 1));
       // 線路をまたぐ縦の道は踏切だけ
       if (down !== undefined && (j !== 7 || CROSSINGS.has(i))) {
         const c = classify(i, j, i, j + 1);
-        // 北西の8番通りは北向きの一方通行（a を南側にして a→b を北向きにする）
-        if (i === 8 && north(j + 1) && c.cls === 'local') add(down, a, c.cls, c.width, { oneway: true });
-        else add(a, down, c.cls, c.width);
+        // 南北の一方通行（3番通りは南向き、8番通りは北向き。a を始点にして a→b を進行方向にする）
+        const dir = north(j + 1) && c.cls === 'local' ? ONEWAY_COLS[i] : undefined;
+        if (dir === 'N') add(down, a, c.cls, c.width, { oneway: true });
+        else add(a, down, c.cls, c.width, { oneway: dir === 'S' });
       }
     }
   }
@@ -188,6 +193,8 @@ export function roadNetwork(): RoadNetwork {
     east: g(19, 6),
     // 第4章：店舗（川の近く。歩道橋・旧橋の影響が見える位置）
     store: g(10, 9),
+    // 第4章（車）：旧橋の東のたもと。東向き一方通行の影響で「店舗から」と「店舗へ」が変わる
+    carStore: g(14, 6),
     // 第6章：配送センター
     depot: g(6, 9),
   };

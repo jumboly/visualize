@@ -3,34 +3,7 @@ import { ch2 } from './ch2';
 import { ch3 } from './ch3';
 import { ch4 } from './ch4';
 import { ch5 } from './ch5';
+import { ch6 } from './ch6';
 import type { ChapterDef } from './types';
 
-/** まだ実装していない章の仮置き。Phase ごとに本物へ差し替える。 */
-function placeholder(no: number, title: string, model: string): ChapterDef {
-  return {
-    no,
-    title,
-    model,
-    create(host) {
-      return {
-        beats: [
-          {
-            title: '準備中',
-            caption: '<p class="muted">この章は準備中です。</p>',
-            enter: () => (host.stage.innerHTML = ''),
-          },
-        ],
-        dispose() {},
-      };
-    },
-  };
-}
-
-export const chapters: ChapterDef[] = [
-  ch1,
-  ch2,
-  ch3,
-  ch4,
-  ch5,
-  placeholder(6, '巡回セールスマン問題', 'ダイクストラ法の結果を、別の最適化問題の入力にする'),
-];
+export const chapters: ChapterDef[] = [ch1, ch2, ch3, ch4, ch5, ch6];

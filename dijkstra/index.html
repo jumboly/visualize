@@ -6,6 +6,18 @@
 <title>ダイクストラ法を可視化して腹に落とす</title>
 </head>
 <body>
+<!-- dev-only -->
+<!--
+  Why: このファイルは Vite の開発用エントリで、ブラウザで直接（file://）開くと
+  /src/main.ts を読み込めず真っ白になる。取り違えたときに気づけるよう案内を出す。
+  main.ts が動けばこの案内は消え、ビルド時には inline-assets プラグインが取り除く。
+-->
+<div id="dev-hint" style="font: 16px/1.8 system-ui, sans-serif; max-width: 40em; margin: 4em auto; padding: 0 16px;">
+  <h1 style="font-size: 20px;">このファイルは開発用です</h1>
+  <p>ブラウザで直接開く場合は、ビルド済みの <code>dist/index.html</code> を開いてください。</p>
+  <p>開発するときは <code>npm install</code> → <code>npm run dev</code> を実行し、表示された URL（http://localhost:5173）を開きます。</p>
+</div>
+<!-- /dev-only -->
 <div id="app"></div>
 <script type="module" src="/src/main.ts"></script>
 </body>

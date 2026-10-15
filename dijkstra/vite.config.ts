@@ -15,6 +15,8 @@ function inlineAssets(): Plugin {
       const html = bundle['index.html'];
       if (!html || html.type !== 'asset') return;
       let source = String(html.source);
+      // 開発用 index.html を直接開いたとき用の案内は、ビルド成果物には不要なので取り除く
+      source = source.replace(/<!-- dev-only -->[\s\S]*?<!-- \/dev-only -->\n?/, '');
       for (const [name, chunk] of Object.entries(bundle)) {
         if (chunk.type === 'chunk' && name.endsWith('.js')) {
           const re = new RegExp(`<script[^>]*src="[^"]*${escapeRe(name)}"[^>]*></script>`);

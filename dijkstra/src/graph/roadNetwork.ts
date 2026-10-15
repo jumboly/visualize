@@ -246,3 +246,10 @@ export function nearestNode(net: RoadNetwork, x: number, y: number): number {
   }
   return best;
 }
+
+/** 第5章の領域分割：川と線路で4つの地区に分ける（0: 北西, 1: 北東, 2: 南西, 3: 南東） */
+export const REGION_NAMES = ['北西', '北東', '南西', '南東'];
+export function regionsByRiverRail(net: Network): { region: Int32Array; count: number } {
+  const region = Int32Array.from(net.nodes, (v) => (v.x < riverX(v.y) ? 0 : 1) + (v.y > RAIL_Y ? 2 : 0));
+  return { region, count: 4 };
+}

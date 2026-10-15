@@ -204,3 +204,30 @@ svg.net { font-family: var(--sans); user-select: none; -webkit-user-select: none
 .limit-tick { stroke: #fff; stroke-width: 5; stroke-linecap: round; pointer-events: none; }
 .reach-circle { fill: none; stroke: #ff9e7a; stroke-width: 5; stroke-dasharray: 16 12; pointer-events: none; }
 label.chk { display: inline-flex; align-items: center; gap: 3px; margin-right: 6px; cursor: pointer; }
+
+/* ---------- 第5章：階層探索 ---------- */
+.dual { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--line); }
+.dual.single { grid-template-columns: 0 1fr; gap: 0; }
+.dual.single .plain { visibility: hidden; }
+.pane { position: relative; background: var(--bg); min-width: 0; min-height: 0; }
+.pane > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.pane-title { position: absolute; left: 12px; top: 8px; z-index: 1; font-size: 14px; color: var(--sub); background: rgba(11,15,23,.8); padding: 2px 8px; border-radius: 6px; }
+.dual.single .pane-title { display: none; }
+.h5 .road { opacity: .45; }
+.h5 .node .body { opacity: 0; }
+.h5 .node:hover .body { opacity: 1; }
+.region { fill-opacity: .07; }
+.region-name { font-size: 30px; font-weight: 700; opacity: .7; }
+.paint-e { fill: none; stroke-width: 7; stroke-linecap: round; stroke-opacity: .75; pointer-events: none; }
+.paint-n { stroke: none; pointer-events: none; }
+.paint-e.p-plain, .paint-e.p-fwd { stroke: var(--blue); }
+.paint-n.p-plain, .paint-n.p-fwd { fill: #a9d1ff; }
+.paint-e.p-back { stroke: #ff9e7a; }
+.paint-n.p-back { fill: #ffd2c2; }
+.bnode { fill: var(--accent); stroke: #0b0f17; stroke-width: 4; pointer-events: none; }
+.upper .shortcut { fill: none; stroke: #c6a2ff; stroke-width: 4; stroke-opacity: .7; }
+.upper .cross { fill: none; stroke: #c6a2ff; stroke-width: 9; stroke-opacity: .8; }
+.upper-hot .hot { fill: none; stroke: #e5d4ff; stroke-width: 6; }
+.upper-hot .hot.sink { stroke: #ff9e7a; stroke-dasharray: 14 10; stroke-width: 4; }
+.upper-hot .best { fill: none; stroke: var(--accent); stroke-width: 10; stroke-linecap: round; }
+#app.present .pane-title { font-size: 17px; }

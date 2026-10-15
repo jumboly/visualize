@@ -2,6 +2,7 @@ import { ch1 } from './ch1';
 import { ch2 } from './ch2';
 import { ch3 } from './ch3';
 import { ch4 } from './ch4';
+import { ch5 } from './ch5';
 import type { ChapterDef } from './types';
 
 /** まだ実装していない章の仮置き。Phase ごとに本物へ差し替える。 */
@@ -30,6 +31,6 @@ export const chapters: ChapterDef[] = [
   ch2,
   ch3,
   ch4,
-  placeholder(5, '階層探索で高速化する', 'アルゴリズムだけでなく、探索する対象の構造を工夫する'),
+  ch5,
   placeholder(6, '巡回セールスマン問題', 'ダイクストラ法の結果を、別の最適化問題の入力にする'),
 ];

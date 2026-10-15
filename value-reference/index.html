@@ -1,0 +1,1113 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>値渡しなのに値が変わる？</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --fg: #e6edf3;
+    --sub: #9aa7b8;
+    --nav: rgba(230, 237, 243, 0.28);
+  }
+  html, body {
+    margin: 0; height: 100%; background: #05070b; color: var(--fg); overflow: hidden;
+    font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", sans-serif;
+    /* ダブルクリックでの文字選択が発表中に出ないようにする */
+    user-select: none; -webkit-user-select: none;
+  }
+  #app { position: fixed; inset: 0; display: grid; place-items: center; cursor: default; }
+  canvas { display: block; background: var(--bg); }
+  .nav {
+    position: fixed; bottom: 18px; width: 52px; height: 52px; border-radius: 50%;
+    border: 1px solid var(--nav); background: rgba(11, 15, 23, 0.6); color: var(--sub);
+    font-size: 26px; line-height: 1; cursor: pointer; opacity: 0.45; transition: opacity .2s, color .2s;
+  }
+  .nav:hover { opacity: 1; color: var(--fg); }
+  #prev { left: 18px; }
+  #next { right: 18px; }
+  #fs { bottom: auto; top: 14px; right: 14px; width: 38px; height: 38px; font-size: 16px; opacity: 0.25; }
+  #hud {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 14px; align-items: center; font-size: 13px; color: var(--sub);
+    opacity: 0.55; pointer-events: none; white-space: nowrap;
+  }
+  #dots { display: flex; gap: 5px; }
+  #dots i { width: 7px; height: 7px; border-radius: 50%; background: #2a3342; display: block; }
+  #dots i.done { background: #4c5a70; }
+  #dots i.cur { background: #e6edf3; }
+</style>
+</head>
+<body>
+<div id="app"><canvas id="cv"></canvas></div>
+<button id="prev" class="nav" tabindex="-1" aria-label="前へ">‹</button>
+<button id="next" class="nav" tabindex="-1" aria-label="次へ">›</button>
+<button id="fs" class="nav" tabindex="-1" aria-label="フルスクリーン">⛶</button>
+<div id="hud"><span id="sceneName"></span><span id="dots"></span><span id="stepNo"></span></div>
+
+<script src="model.js"></script>
+<script>
+'use strict';
+/* =========================================================================
+ * 設計メモ
+ * - 各シーンの C# は「操作列」として定義し、model.js が操作ごとの前後の状態を先に計算する。
+ * - 画面は「ステップ番号 k と、そのステップに入ってからの経過時間 t」の純粋関数として毎フレーム描く。
+ *   いま実行中の操作の (前の状態, 後の状態, 進捗 u) だけで描くので、途中で前後移動・連打しても破綻しない。
+ * - 前に進むときは t=0 から再生、戻る/ジャンプするときは t=∞（完了状態）で描く。
+ * - 操作の種類ごとに演出を 1 つだけ実装している（animate()）。
+ *   「コピー」「代入」「メンバー変更」が、値型/参照型やシーンを問わず必ず同じ動きになるようにするため。
+ * ========================================================================= */
+
+const W = 1920, H = 1080;
+const MONO = '"SF Mono", Menlo, Consolas, "Courier New", monospace';
+const SANS = '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", sans-serif';
+const M = VRModel;
+
+// 色は意味ごとに固定する。ただし色だけに頼らないよう、形（実線の矢印 / 破線のリンク / 破線の札）でも区別する
+const C = {
+  bg: '#0b0f17', panel: '#121a28', line: '#223047', text: '#e6edf3', sub: '#9aa7b8', faint: '#5b6678',
+  blue: [77, 163, 255], white: [240, 244, 250], cyan: [95, 211, 230], green: [61, 220, 132], fresh: [140, 255, 180],
+  orange: [255, 159, 67], yellow: [255, 209, 102], gray: [110, 120, 138],
+};
+
+// ---------- 汎用ヘルパー ----------
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, u) => a + (b - a) * u;
+const easeIO = (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
+const easeOut = (u) => 1 - Math.pow(1 - u, 3);
+const prog = (t, delay, dur) => (dur <= 0 ? (t >= delay ? 1 : 0) : clamp((t - delay) / dur));
+const span = (u, a, b) => clamp((u - a) / (b - a));
+// a〜b の間に 0→1→0 と山になる値（一瞬光らせる演出用）
+const bump = (u, a, b) => (u <= a || u >= b ? 0 : Math.sin(Math.PI * (u - a) / (b - a)));
+const rgba = (c, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+
+// ---------- Canvas ----------
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let scale = 1;
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+  cv.style.width = W * scale + 'px';
+  cv.style.height = H * scale + 'px';
+  cv.width = Math.round(W * scale * dpr);
+  cv.height = Math.round(H * scale * dpr);
+  ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+function text(str, x, y, o = {}) {
+  ctx.save();
+  ctx.globalAlpha *= o.alpha ?? 1;
+  ctx.font = `${o.weight || 400} ${o.size || 28}px ${o.mono ? MONO : SANS}`;
+  ctx.fillStyle = o.color || C.text;
+  ctx.textAlign = o.align || 'left';
+  ctx.textBaseline = o.baseline || 'alphabetic';
+  ctx.fillText(str, x, y);
+  ctx.restore();
+}
+// 色分けした語句を1行に並べる（[文字列, 色] の配列）
+function richText(parts, x, y, o = {}) {
+  ctx.save();
+  ctx.globalAlpha *= o.alpha ?? 1;
+  ctx.font = `${o.weight || 400} ${o.size || 28}px ${SANS}`;
+  ctx.textBaseline = 'alphabetic';
+  const total = parts.reduce((s, [str]) => s + ctx.measureText(str).width, 0);
+  let cx = o.align === 'center' ? x - total / 2 : x;
+  for (const [str, col] of parts) {
+    ctx.fillStyle = col || C.text;
+    ctx.fillText(str, cx, y);
+    cx += ctx.measureText(str).width;
+  }
+  ctx.restore();
+}
+function rrect(x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+}
+function header(title, alpha = 1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = rgba(C.yellow);
+  ctx.fillRect(80, 36, 6, 34);
+  text(title, 104, 66, { size: 34, weight: 700 });
+  ctx.restore();
+}
+function caption(parts, alpha, o = {}) {
+  if (alpha <= 0 || !parts) return;
+  if (typeof parts === 'string') parts = [[parts]];
+  richText(parts, W / 2, o.y ?? 990, { size: o.size || 38, weight: o.weight || 700, align: 'center', alpha });
+}
+function pill(str, x, y, o = {}) {
+  ctx.save();
+  ctx.globalAlpha *= o.alpha ?? 1;
+  ctx.font = `${o.weight || 600} ${o.size || 22}px ${o.mono ? MONO : SANS}`;
+  const w = ctx.measureText(str).width + (o.padX ?? 18) * 2, h = (o.size || 22) + 16;
+  rrect(x - w / 2, y - h / 2, w, h, h / 2);
+  ctx.fillStyle = o.bg || 'rgba(11,15,23,0.92)'; ctx.fill();
+  ctx.strokeStyle = o.border || rgba(o.col || C.white, 0.7); ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = rgba(o.col || C.white);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(str, x, y + 1);
+  ctx.restore();
+}
+
+// ---------- C# コード表示 ----------
+const KW = new Set(['class', 'struct', 'void', 'int', 'public', 'new', 'var', 'return']);
+const TYPES = new Set(['Box', 'ValueBox', 'ReferenceBox', 'Console']);
+const CODE = { size: 30, lh: 46, pad: 22, y: 96 };
+function panelRects(panels) {
+  const maxL = Math.max(...panels.map((p) => p.lines.length));
+  const h = maxL * CODE.lh + CODE.pad * 2 - (CODE.lh - CODE.size) + 4;
+  if (panels.length === 1) return [{ x: 80, y: CODE.y, w: 1760, h }];
+  return [{ x: 80, y: CODE.y, w: 860, h }, { x: 980, y: CODE.y, w: 860, h }];
+}
+function drawCodeLines(lines, x, y, o = {}) {
+  const size = o.size || CODE.size, lh = o.lh || CODE.lh;
+  ctx.save();
+  ctx.font = `${size}px ${MONO}`;
+  ctx.textBaseline = 'top';
+  lines.forEach((ln, li) => {
+    const by = y + li * lh;
+    const hl = o.hl && o.hl.has(li);
+    if (hl) {
+      ctx.fillStyle = rgba(C.yellow, 0.16);
+      ctx.fillRect(x - 14, by - (lh - size) / 2, o.w - 12, lh);
+      ctx.fillStyle = rgba(C.yellow, 0.95);
+      ctx.fillRect(x - 14, by - (lh - size) / 2, 5, lh);
+    }
+    let cx = x;
+    for (const tok of ln.match(/\/\/.*$|\s+|[A-Za-z_]\w*|\d+|./g) || []) {
+      let col = '#8b949e', wt = 400;
+      if (tok.startsWith('//')) col = '#6e7681';
+      else if (tok === 'ref') { col = rgba(C.orange); wt = 700; } // ref は「参照渡しの接続」と同じ色にして対応を見せる
+      else if (KW.has(tok)) col = '#ff7b72';
+      else if (TYPES.has(tok)) col = '#d2a8ff';
+      else if (/^\d/.test(tok)) col = '#ffa657';
+      else if (/^[A-Za-z_]/.test(tok)) col = C.text;
+      ctx.font = `${wt} ${size}px ${MONO}`;
+      ctx.fillStyle = col;
+      ctx.fillText(tok, cx, by);
+      cx += ctx.measureText(tok).width;
+    }
+  });
+  ctx.restore();
+}
+function drawPanels(panels, hlAt, alpha = 1) {
+  const rects = panelRects(panels);
+  const hl = normAt(hlAt);
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  panels.forEach((p, i) => {
+    const r = rects[i];
+    rrect(r.x, r.y, r.w, r.h, 12);
+    ctx.fillStyle = C.panel; ctx.fill();
+    ctx.strokeStyle = C.line; ctx.lineWidth = 1; ctx.stroke();
+    text(p.title, r.x + r.w - 20, r.y + 30, { size: 18, color: C.faint, align: 'right' });
+    drawCodeLines(p.lines, r.x + CODE.pad + 6, r.y + CODE.pad, { w: r.w, hl: new Set(hl.filter(([pi]) => pi === i).map(([, li]) => li)) });
+  });
+  ctx.restore();
+}
+// at は [panel, line] か、その配列（呼び出し行と関数の宣言行を同時に光らせるため）
+const normAt = (at) => (!at ? [] : Array.isArray(at[0]) ? at : [at]);
+// リテラルがコードのどこから飛んでくるかを、実際の文字位置から求める
+function codeAnchor(prog, at, lit, L) {
+  if (prog.mini || !prog.code) return { x: L.px, y: L.ft - 40 };
+  const [pi, li] = normAt(at)[0];
+  const r = panelRects(prog.code)[pi], line = prog.code[pi].lines[li];
+  ctx.save();
+  ctx.font = `${CODE.size}px ${MONO}`;
+  const idx = lit && line.indexOf(lit) >= 0 ? line.indexOf(lit) : line.search(/\S/);
+  const x = r.x + CODE.pad + 6 + ctx.measureText(line.slice(0, idx)).width + (lit ? ctx.measureText(lit).width / 2 : 0);
+  ctx.restore();
+  return { x, y: r.y + CODE.pad + li * CODE.lh + CODE.size / 2 };
+}
+
+// =========================================================================
+// 可視化：レイアウト
+// 呼び出し元（左）・オブジェクト（中央）・関数（右）の位置関係は全シーンで固定する
+// =========================================================================
+const L_MAIN = { cx: 330, ox: 960, px: 1590, vy: 590, oy: [590, 800], ft: 360, fb: 905, fw: 240, bw: 240, bh: 110, ow: 290, oh: 150, peak: 425, outY: 800 };
+const L_MINI = { mini: true, cx: 250, ox: 700, px: 1150, vy: 560, oy: [560, 735], ft: 400, fb: 815, fw: 210, bw: 240, bh: 110, ow: 290, oh: 150, peak: 445, outY: 740 };
+const HANDLE = { w: 230, h: 84 };
+
+function varXY(L, v) { return v.pos || { x: v.scope === 'caller' ? L.cx : L.px, y: L.vy }; }
+function objXY(L, o) { return o.pos || { x: L.ox, y: L.oy[parseInt(o.oid.slice(1), 10) - 1] }; }
+
+// ---------- 表示用データ（状態 → 描画パラメータ） ----------
+function buildDisp(s, L) {
+  const d = { vars: {}, objs: {}, arrows: {}, links: {}, calleeA: s.callee ? 1 : 0, calleeTitle: s.callee && s.callee.title, out: s.out, outA: s.out != null ? 1 : 0, outSc: 1, tokens: [], pulses: [] };
+  for (const id of s.order) {
+    const v = s.vars[id], p = varXY(L, v);
+    d.vars[id] = { id, name: v.name, type: v.type, scope: v.scope, alias: v.alias, x: p.x, y: p.y, a: 1, sc: 1, shown: v.val, chg: v.chg, fchg: v.fchg, valSc: 1, flash: 0, flashCol: C.white, ring: 0, read: 0 };
+    if (v.alias) d.links[id] = { from: id, to: v.alias, p: 1, a: 1, glow: 0 };
+    else if (v.val && v.val.k === 'ref') d.arrows[id] = { from: id, to: v.val.o, fromObj: null, sw: 1, p: 1, a: 1, glow: 0 };
+  }
+  for (const id in d.links) d.vars[d.links[id].to].ring = 1;
+  for (const oid in s.objs) {
+    const o = s.objs[oid], p = objXY(L, o);
+    d.objs[oid] = { oid, type: o.type, x: p.x, y: p.y, a: 1, sc: 1, f: Object.assign({}, o.f), chg: Object.assign({}, o.chg), fresh: o.fresh, dim: M.isOrphan(s, oid) ? 1 : 0, glow: 0, fflash: 0, fflashCol: C.yellow, fSc: 1 };
+  }
+  return d;
+}
+
+// ---------- 幾何 ----------
+// ref 接続の端点。変数名ラベル（箱の上）と重ならないよう、札の左端から出て箱の右上に付ける
+const boxTop = (v, L) => ({ x: v.x + L.bw / 2 + 10, y: v.y - L.bh / 2 + 18 });
+const handleTop = (v) => ({ x: v.x - HANDLE.w / 2, y: v.y });
+function bez(p0, p1, p2, p3, t) {
+  const m = 1 - t;
+  return { x: m * m * m * p0.x + 3 * m * m * t * p1.x + 3 * m * t * t * p2.x + t * t * t * p3.x, y: m * m * m * p0.y + 3 * m * m * t * p1.y + 3 * m * t * t * p2.y + t * t * t * p3.y };
+}
+// ref 引数 → 呼び出し元の変数 への接続。オブジェクトの上を大きく回り込ませ、参照（矢印）と交差させない
+function linkPts(hv, tv, L, n = 40) {
+  const a = handleTop(hv), b = boxTop(tv, L);
+  const c1 = { x: a.x - 90, y: L.peak }, c2 = { x: b.x + 90, y: L.peak };
+  return Array.from({ length: n + 1 }, (_, i) => bez(a, c1, c2, b, i / n));
+}
+function arrowEnds(v, o, L) {
+  const right = o.x > v.x;
+  return {
+    s: { x: v.x + (right ? L.bw / 2 : -L.bw / 2), y: v.y },
+    e: { x: o.x + (right ? -L.ow / 2 : L.ow / 2), y: o.y },
+  };
+}
+const fieldPt = (o) => ({ x: o.x + 72, y: o.y + 30 });
+const structFieldPt = (v) => ({ x: v.x + 52, y: v.y + 4 });
+function arcPts(a, b, peakY, n = 30) {
+  const c = { x: (a.x + b.x) / 2, y: peakY };
+  return Array.from({ length: n + 1 }, (_, i) => {
+    const t = i / n, m = 1 - t;
+    return { x: m * m * a.x + 2 * m * t * c.x + t * t * b.x, y: m * m * a.y + 2 * m * t * c.y + t * t * b.y };
+  });
+}
+function along(pts, f) {
+  const segs = [];
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) { const l = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y); segs.push(l); total += l; }
+  let r = clamp(f) * total;
+  for (let i = 0; i < segs.length; i++) {
+    if (r <= segs[i] || i === segs.length - 1) {
+      const u = segs[i] ? clamp(r / segs[i]) : 1;
+      return { x: lerp(pts[i].x, pts[i + 1].x, u), y: lerp(pts[i].y, pts[i + 1].y, u) };
+    }
+    r -= segs[i];
+  }
+  return pts[pts.length - 1];
+}
+// 変数 vid に書き込む（または読む）とき、実際にたどる経路。ref 引数なら接続をたどって呼び出し元の変数へ行く
+function aliasPath(d, vid, L, end = 'center') {
+  const v = d.vars[vid];
+  if (!v.alias) return [end === 'top' ? boxTop(v, L) : { x: v.x, y: v.y }];
+  const t = d.vars[v.alias];
+  return [{ x: v.x, y: v.y }, ...linkPts(v, t, L), ...(end === 'top' ? [] : [{ x: t.x, y: t.y }])];
+}
+
+// =========================================================================
+// 操作ごとの演出。同じ操作には必ず同じ演出を使う
+// =========================================================================
+function animate(d, item, u, L, prog) {
+  const { op, before: B, after: A } = item;
+  const dimTo = (w) => { for (const oid in d.objs) d.objs[oid].dim = lerp(M.isOrphan(B, oid) ? 1 : 0, M.isOrphan(A, oid) ? 1 : 0, w); };
+  switch (op.op) {
+    case 'decl': {
+      const v = d.vars[op.v], e = easeOut(u);
+      v.a = e; v.sc = 0.85 + 0.15 * e;
+      break;
+    }
+    case 'new': {
+      const o = d.objs[op.o], e = easeOut(span(u, 0, 0.55));
+      o.a = e; o.sc = 0.6 + 0.4 * e; o.glow = 1 - 0.7 * span(u, 0.55, 1);
+      break;
+    }
+    case 'enter':
+      d.calleeA = easeIO(u);
+      break;
+    case 'ret': {
+      const k = 1 - easeIO(u);
+      for (const id in d.vars) if (d.vars[id].scope === 'callee') d.vars[id].a = k;
+      for (const id in d.arrows) if (d.vars[id].scope === 'callee') d.arrows[id].a = k;
+      for (const id in d.links) { d.links[id].a = k; d.vars[d.links[id].to].ring = k; }
+      d.calleeA = k;
+      dimTo(easeIO(u));
+      break;
+    }
+    case 'set':
+    case 'copy':
+      animAssign(d, item, u, L, prog);
+      break;
+    case 'bind': {
+      // 参照渡し：新しい箱は作らず、呼び出し元の変数へ接続を伸ばす
+      const hv = d.vars[op.v], tv = d.vars[op.to], ln = d.links[op.v];
+      hv.a = easeOut(span(u, 0, 0.3)); hv.sc = 0.85 + 0.15 * hv.a;
+      ln.p = easeIO(span(u, 0.3, 0.8));
+      tv.ring = easeOut(span(u, 0.72, 1));
+      tv.flash = bump(u, 0.72, 1); tv.flashCol = C.orange;
+      break;
+    }
+    case 'field': {
+      // メンバー変更：数値は「変数をたどって」書き込み先まで運ぶ。途中の変数の中身は変わらない
+      const R = M.resolve(A, op.v), rv = d.vars[R.id];
+      const pts = [codeAnchor(prog, op.at, op.lit, L)];
+      let o = null;
+      if (R.val.k === 'ref') {
+        o = d.objs[R.val.o];
+        const ae = arrowEnds(rv, o, L);
+        pts.push(...aliasPath(d, op.v, L, 'top'), ae.s, ae.e, fieldPt(o));
+      } else {
+        pts.push(...aliasPath(d, op.v, L, 'top'), structFieldPt(rv));
+      }
+      const f1 = 0.65, uf = easeIO(span(u, 0.05, f1)), ul = span(u, f1, 0.8);
+      if (u < f1) d.tokens.push({ pos: along(pts, uf), val: { k: 'int', v: op.val } });
+      if (d.links[op.v]) d.links[op.v].glow = bump(u, 0.05, f1);
+      if (o) {
+        d.arrows[R.id].glow = bump(u, 0.2, f1 + 0.05);
+        rv.read = bump(u, 0.15, 0.45);
+        const bo = B.objs[o.oid];
+        if (u < f1) { o.f = Object.assign({}, bo.f); o.chg = Object.assign({}, bo.chg); }
+        else { o.fflash = bump(u, f1, 1); o.fSc = 1 + 0.35 * (1 - easeOut(ul)); }
+      } else {
+        const bv = M.resolve(B, op.v);
+        if (u < f1) { rv.shown = bv.val; rv.fchg = bv.fchg; }
+        else { rv.flash = bump(u, f1, 1); rv.flashCol = C.yellow; rv.valSc = 1 + 0.3 * (1 - easeOut(ul)); }
+      }
+      break;
+    }
+    case 'print': {
+      const R = M.resolve(A, op.v), rv = d.vars[R.id];
+      const pts = [{ x: rv.x, y: rv.y }];
+      let o = null;
+      if (R.val.k === 'ref') { o = d.objs[R.val.o]; const ae = arrowEnds(rv, o, L); pts.push(ae.s, ae.e, fieldPt(o)); }
+      else pts.push(structFieldPt(rv));
+      const f1 = 0.5;
+      if (u < f1 + 0.05) d.pulses.push({ pos: along(pts, easeIO(span(u, 0, f1))) });
+      rv.read = bump(u, 0, 0.3);
+      if (o) { d.arrows[R.id].glow = bump(u, 0.05, f1 + 0.1); o.fflash = bump(u, f1 - 0.05, 0.8); o.fflashCol = C.cyan; }
+      d.out = A.out; d.outA = easeOut(span(u, f1, 0.8)); d.outSc = 1 + 0.3 * (1 - easeOut(span(u, f1, 0.9)));
+      break;
+    }
+  }
+}
+
+// 代入とコピーは「値が箱に入る」という同じ動き。コピーは送り元が変数（中身は残る）、代入は送り元がコードやオブジェクト
+function animAssign(d, item, u, L, prog) {
+  const { op, before: B, after: A } = item;
+  const isCopy = op.op === 'copy';
+  const tgt = isCopy ? op.v : M.resolve(A, op.v).id;
+  const tv = d.vars[tgt];
+  const s0 = isCopy ? 0.18 : 0, sp = 1 - s0;
+  const fl0 = s0 + sp * 0.06, fl1 = s0 + sp * 0.58, land = s0 + sp * 0.68;
+  if (isCopy) { const e = easeOut(span(u, 0, s0)); tv.a = e; tv.sc = 0.85 + 0.15 * e; }
+  const bv = B.vars[tgt];
+  const oldVal = bv ? bv.val : null, newVal = A.vars[tgt].val;
+
+  let srcPt, path;
+  if (isCopy) {
+    const sv = d.vars[op.from];
+    srcPt = { x: sv.x, y: sv.y };
+    // 送り元の中身はそのまま残る（読むだけ）ことを、白い光で示す
+    sv.flash = bump(u, s0 - 0.05, fl1); sv.flashCol = C.white;
+    path = arcPts(srcPt, { x: tv.x, y: tv.y }, L.peak - 20);
+  } else {
+    if (op.src === 'obj') { const o = d.objs[newVal.o]; srcPt = { x: o.x, y: o.y - L.oh / 2 + 36 }; }
+    else srcPt = codeAnchor(prog, op.at, op.lit, L);
+    path = [srcPt, ...aliasPath(d, op.v, L)];
+  }
+  if (u >= fl0 && u < fl1) d.tokens.push({ pos: along(path, easeIO(span(u, fl0, fl1))), val: newVal });
+  if (d.links[op.v]) d.links[op.v].glow = bump(u, fl0, fl1);
+
+  if (u < fl1) {
+    tv.shown = oldVal; tv.chg = bv ? bv.chg : false; tv.fchg = bv ? bv.fchg : {};
+  } else {
+    tv.valSc = 1 + 0.3 * (1 - easeOut(span(u, fl1, land + 0.1)));
+    tv.flash = bump(u, fl1, 1); tv.flashCol = op.chg ? C.yellow : C.blue;
+  }
+  // 参照が変わったら矢印を付け替える（伸ばす / 振り向ける）
+  const oldRef = oldVal && oldVal.k === 'ref' ? oldVal.o : null, newRef = newVal && newVal.k === 'ref' ? newVal.o : null;
+  const ua = easeIO(span(u, land, 1));
+  if (u < fl1 || !newRef) {
+    if (oldRef) d.arrows[tgt] = { from: tgt, to: oldRef, fromObj: null, sw: 1, p: 1, a: 1, glow: 0 };
+    else delete d.arrows[tgt];
+  } else if (oldRef && oldRef !== newRef) {
+    d.arrows[tgt].fromObj = oldRef; d.arrows[tgt].sw = ua;
+  } else if (!oldRef) {
+    d.arrows[tgt].p = ua;
+  }
+  for (const oid in d.objs) d.objs[oid].dim = lerp(M.isOrphan(B, oid) ? 1 : 0, M.isOrphan(A, oid) ? 1 : 0, ua);
+}
+
+// =========================================================================
+// 描画
+// =========================================================================
+function drawFrames(d, L, prog) {
+  if (prog.frames === false) return;
+  ctx.save();
+  ctx.lineWidth = 2;
+  rrect(L.cx - L.fw, L.ft, L.fw * 2, L.fb - L.ft, 18);
+  ctx.strokeStyle = '#26334a'; ctx.stroke();
+  text('呼び出し元', L.cx - L.fw + 22, L.ft + 36, { size: 24, color: C.sub, weight: 600 });
+  text('オブジェクト', L.ox, L.ft + 36, { size: 22, color: C.faint, align: 'center' });
+  if (d.calleeA > 0) {
+    ctx.globalAlpha *= d.calleeA;
+    rrect(L.px - L.fw, L.ft, L.fw * 2, L.fb - L.ft, 18);
+    ctx.fillStyle = 'rgba(210,168,255,0.035)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(210,168,255,0.35)'; ctx.stroke();
+    text('関数 ' + (d.calleeTitle || ''), L.px - L.fw + 22, L.ft + 36, { size: 24, color: '#c9b2ec', weight: 600 });
+  }
+  ctx.restore();
+}
+
+function drawArrow(ar, d, L) {
+  const v = d.vars[ar.from], o = d.objs[ar.to];
+  if (!v || !o || ar.a <= 0) return;
+  const ae = arrowEnds(v, o, L);
+  let e = ae.e;
+  if (ar.fromObj && ar.sw < 1) {
+    const oe = arrowEnds(v, d.objs[ar.fromObj], L).e;
+    e = { x: lerp(oe.x, ae.e.x, ar.sw), y: lerp(oe.y, ae.e.y, ar.sw) };
+  }
+  const s = ae.s;
+  const tip = { x: lerp(s.x, e.x, ar.p), y: lerp(s.y, e.y, ar.p) };
+  ctx.save();
+  ctx.globalAlpha *= ar.a * Math.min(v.a, o.a);
+  ctx.strokeStyle = rgba(C.cyan); ctx.fillStyle = rgba(C.cyan);
+  ctx.lineWidth = 4 + 3 * ar.glow;
+  if (ar.glow > 0) { ctx.shadowColor = rgba(C.cyan); ctx.shadowBlur = 22 * ar.glow; }
+  ctx.beginPath(); ctx.arc(s.x, s.y, 7, 0, Math.PI * 2); ctx.fill();
+  if (ar.p > 0.02) {
+    const ang = Math.atan2(e.y - s.y, e.x - s.x), hl = 20;
+    ctx.beginPath(); ctx.moveTo(s.x, s.y);
+    ctx.lineTo(tip.x - Math.cos(ang) * hl * 0.6, tip.y - Math.sin(ang) * hl * 0.6); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(tip.x, tip.y);
+    ctx.lineTo(tip.x - hl * Math.cos(ang - 0.42), tip.y - hl * Math.sin(ang - 0.42));
+    ctx.lineTo(tip.x - hl * Math.cos(ang + 0.42), tip.y - hl * Math.sin(ang + 0.42));
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawLink(ln, d, L) {
+  const hv = d.vars[ln.from], tv = d.vars[ln.to];
+  if (ln.a <= 0 || ln.p <= 0) return;
+  const pts = linkPts(hv, tv, L);
+  const n = Math.max(1, Math.round((pts.length - 1) * ln.p));
+  ctx.save();
+  ctx.globalAlpha *= ln.a * hv.a;
+  ctx.strokeStyle = rgba(C.orange); ctx.fillStyle = rgba(C.orange);
+  ctx.lineWidth = 5 + 3 * ln.glow;
+  if (ln.glow > 0) { ctx.shadowColor = rgba(C.orange); ctx.shadowBlur = 24 * ln.glow; }
+  ctx.setLineDash([16, 11]);
+  ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i <= n; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // 終端は矢じりではなく「つかむ」丸にして、オブジェクト参照の矢印と形でも区別する
+  if (ln.p >= 1) { const e = pts[pts.length - 1]; ctx.beginPath(); ctx.arc(e.x, e.y, 9, 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore();
+  if (ln.p > 0.5) {
+    const m = pts[Math.round(pts.length / 2)];
+    // 縮小表示では長いラベルがオブジェクトに重なるので短くする
+    pill(L.mini ? 'ref' : 'ref（変数そのものへの接続）', m.x, m.y, { size: 20, col: C.orange, alpha: ln.a * hv.a * easeIO(span(ln.p, 0.5, 1)) });
+  }
+}
+
+function valText(val) {
+  if (!val) return '';
+  if (val.k === 'int') return String(val.v);
+  if (val.k === 'ref') return val.o;
+  return `Value=${val.f.Value}`;
+}
+
+function drawVar(v, d, L) {
+  if (v.a <= 0) return;
+  ctx.save();
+  ctx.globalAlpha *= v.a;
+  ctx.translate(v.x, v.y); ctx.scale(v.sc, v.sc); ctx.translate(-v.x, -v.y);
+  if (v.alias) { drawHandle(v, d, L); ctx.restore(); return; }
+  const x = v.x - L.bw / 2, y = v.y - L.bh / 2;
+  // 名前と型（箱の上）
+  ctx.font = `700 30px ${MONO}`;
+  const nw = ctx.measureText(v.name).width;
+  text(v.name, x + 4, y - 14, { size: 30, weight: 700, mono: true });
+  text(v.type, x + 4 + nw + 12, y - 14, { size: 21, color: C.sub, mono: true });
+
+  if (v.ring > 0) {
+    ctx.save(); ctx.globalAlpha *= v.ring;
+    ctx.setLineDash([12, 8]); ctx.strokeStyle = rgba(C.orange); ctx.lineWidth = 3;
+    rrect(x - 10, y - 10, L.bw + 20, L.bh + 20, 16); ctx.stroke();
+    ctx.restore();
+  }
+  rrect(x, y, L.bw, L.bh, 12);
+  ctx.fillStyle = rgba(C.blue, 0.1); ctx.fill();
+  const changed = v.chg || (v.fchg && v.fchg.Value);
+  ctx.lineWidth = 3; ctx.strokeStyle = changed ? rgba(C.yellow) : rgba(C.blue);
+  if (v.flash > 0) { ctx.shadowColor = rgba(v.flashCol); ctx.shadowBlur = 34 * v.flash; ctx.lineWidth = 3 + 3 * v.flash; }
+  if (v.read > 0) { ctx.shadowColor = rgba(C.white); ctx.shadowBlur = 20 * v.read; }
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  const val = v.shown;
+  if (val) {
+    ctx.save();
+    ctx.translate(v.x, v.y); ctx.scale(v.valSc, v.valSc); ctx.translate(-v.x, -v.y);
+    if (val.k === 'int') {
+      text(String(val.v), v.x, v.y + 2, { size: 56, weight: 700, mono: true, align: 'center', baseline: 'middle', color: v.chg ? rgba(C.yellow) : rgba(C.white) });
+    } else if (val.k === 'ref') {
+      text(val.o, v.x, v.y + 2, { size: 46, weight: 700, mono: true, align: 'center', baseline: 'middle', color: v.chg ? rgba(C.yellow) : rgba(C.cyan) });
+    } else {
+      // struct：データそのものが変数の中に入っていることを、フィールドを箱の中に描いて見せる
+      const fc = v.chg || (v.fchg && v.fchg.Value);
+      text('Value', x + 18, v.y + 2, { size: 22, color: C.sub, baseline: 'middle' });
+      text(String(val.f.Value), v.x + 52, v.y + 2, { size: 50, weight: 700, mono: true, align: 'center', baseline: 'middle', color: fc ? rgba(C.yellow) : rgba(C.white) });
+    }
+    ctx.restore();
+  } else {
+    text('?', v.x, v.y + 2, { size: 40, color: '#2c3a52', align: 'center', baseline: 'middle', weight: 700 });
+  }
+  ctx.restore();
+}
+
+// ref 引数：値を入れる箱ではなく「呼び出し元の変数の別名」なので、破線の札として描く
+function drawHandle(v, d, L) {
+  const x = v.x - HANDLE.w / 2, y = v.y - HANDLE.h / 2;
+  const t = d.vars[v.alias];
+  ctx.font = `700 30px ${MONO}`;
+  const nw = ctx.measureText(v.name).width;
+  text(v.name, x + 4, y - 14, { size: 30, weight: 700, mono: true });
+  text(v.type, x + 4 + nw + 12, y - 14, { size: 21, color: rgba(C.orange), mono: true });
+  rrect(x, y, HANDLE.w, HANDLE.h, HANDLE.h / 2);
+  ctx.fillStyle = rgba(C.orange, 0.08); ctx.fill();
+  ctx.setLineDash([12, 8]); ctx.lineWidth = 3; ctx.strokeStyle = rgba(C.orange); ctx.stroke(); ctx.setLineDash([]);
+  text(`＝ ${t ? t.name : ''} そのもの`, v.x, v.y + 2, { size: 26, weight: 700, color: rgba(C.orange), align: 'center', baseline: 'middle' });
+}
+
+function drawObj(o, L) {
+  if (o.a <= 0) return;
+  const x = o.x - L.ow / 2, y = o.y - L.oh / 2;
+  const col = o.fresh ? C.fresh : C.green;
+  ctx.save();
+  ctx.globalAlpha *= o.a * (1 - 0.65 * o.dim);
+  ctx.translate(o.x, o.y); ctx.scale(o.sc, o.sc); ctx.translate(-o.x, -o.y);
+  if (o.glow > 0) { ctx.shadowColor = rgba(C.fresh); ctx.shadowBlur = 50 * o.glow; }
+  rrect(x, y, L.ow, L.oh, 14);
+  ctx.fillStyle = rgba(col, 0.09); ctx.fill();
+  ctx.lineWidth = 3 + 2 * o.glow; ctx.strokeStyle = rgba(col); ctx.stroke();
+  ctx.shadowBlur = 0;
+  // ReferenceBox のような長い型名でもカードからはみ出さないよう、文字を縮めて収める
+  let hs = 26, tw, iw;
+  for (; hs > 14; hs--) {
+    ctx.font = `700 ${hs}px ${SANS}`; tw = ctx.measureText(o.type).width;
+    ctx.font = `700 ${hs}px ${MONO}`; iw = ctx.measureText(o.oid).width;
+    if (tw + iw + 12 <= L.ow - 44) break;
+  }
+  text(o.type, x + 22, y + 40, { size: hs, weight: 700, color: rgba(col) });
+  text(o.oid, x + 22 + tw + 12, y + 40, { size: hs, weight: 700, mono: true, color: rgba(C.cyan) });
+  ctx.fillStyle = rgba(col, 0.35); ctx.fillRect(x + 14, y + 58, L.ow - 28, 2);
+  if (o.fflash > 0) {
+    ctx.fillStyle = rgba(o.fflashCol, 0.22 * o.fflash);
+    rrect(x + 10, y + 68, L.ow - 20, L.oh - 76, 8); ctx.fill();
+  }
+  text('Value', x + 24, o.y + 32, { size: 26, color: C.sub, baseline: 'middle' });
+  text('=', o.x + 10, o.y + 32, { size: 26, color: C.faint, baseline: 'middle', align: 'center' });
+  const fp = fieldPt(o);
+  ctx.save();
+  ctx.translate(fp.x, fp.y); ctx.scale(o.fSc, o.fSc); ctx.translate(-fp.x, -fp.y);
+  text(String(o.f.Value), fp.x, fp.y + 2, { size: 50, weight: 700, mono: true, align: 'center', baseline: 'middle', color: o.chg.Value ? rgba(C.yellow) : rgba(C.white) });
+  ctx.restore();
+  ctx.restore();
+  if (o.dim > 0.5 && !L.mini) text('どの変数からも参照されていない', o.x, y + L.oh + 30, { size: 18, color: C.faint, align: 'center', alpha: o.a * span(o.dim, 0.5, 1) });
+}
+
+function drawToken(tk) {
+  const val = tk.val, p = tk.pos;
+  const col = val.k === 'ref' ? C.cyan : C.white;
+  pill(valText(val), p.x, p.y, { size: val.k === 'struct' ? 28 : 40, weight: 700, mono: true, col, bg: 'rgba(22,32,48,0.96)', border: rgba(col, 0.9), padX: 16 });
+}
+function drawPulse(pl) {
+  ctx.save();
+  ctx.fillStyle = rgba(C.white); ctx.shadowColor = rgba(C.cyan); ctx.shadowBlur = 26;
+  ctx.beginPath(); ctx.arc(pl.pos.x, pl.pos.y, 11, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function drawOut(d, L) {
+  if (d.out == null || d.outA <= 0) return;
+  const x = L.cx, y = L.outY;
+  ctx.save();
+  ctx.globalAlpha *= d.outA;
+  ctx.translate(x, y); ctx.scale(d.outSc, d.outSc); ctx.translate(-x, -y);
+  text('出力', x - 110, y - 50, { size: 20, color: C.sub });
+  rrect(x - 110, y - 36, 220, 76, 10);
+  ctx.fillStyle = '#05080e'; ctx.fill(); ctx.strokeStyle = '#33405a'; ctx.lineWidth = 2; ctx.stroke();
+  text('>', x - 84, y + 4, { size: 36, mono: true, color: C.faint, baseline: 'middle' });
+  text(d.out, x + 14, y + 4, { size: 48, weight: 800, mono: true, color: rgba(C.yellow), baseline: 'middle', align: 'center' });
+  ctx.restore();
+}
+
+function drawDisp(d, L, prog) {
+  drawFrames(d, L, prog);
+  for (const id in d.links) drawLink(d.links[id], d, L);
+  for (const id in d.arrows) drawArrow(d.arrows[id], d, L);
+  for (const oid in d.objs) drawObj(d.objs[oid], L);
+  for (const id in d.vars) drawVar(d.vars[id], d, L);
+  drawOut(d, L);
+  d.tokens.forEach(drawToken);
+  d.pulses.forEach(drawPulse);
+}
+
+// ステップ k の時刻 t で、どの操作がどこまで進んでいるか
+function activeAt(prog, k, t) {
+  const st = prog.steps[k];
+  let cur = null;
+  for (const it of st.ops) if (t >= it.t0) cur = it;
+  if (!cur) return { state: st.start, hl: null };
+  const u = (t - cur.t0) / cur.dur;
+  if (u >= 1) return { state: cur.after, hl: cur.op.at };
+  return { item: cur, u, hl: cur.op.at };
+}
+
+// プログラムのステップ k を時刻 t で描く。戻り値は表示データ（注釈の位置計算用）と現在行
+function renderProg(prog, k, t, L, o = {}) {
+  const A = activeAt(prog, k, t);
+  let d, alpha = 1;
+  if (A.item) {
+    const { op, before, after } = A.item, u = A.u;
+    if (op.op === 'reset') {
+      // 初期状態に戻す：いったん消してから、作り直した初期状態を出す（前の結果を引き継がないことを見せる）
+      if (u < 0.45) { d = buildDisp(before, L); alpha = 1 - easeIO(u / 0.45); }
+      else { d = buildDisp(after, L); alpha = easeIO((u - 0.45) / 0.55); }
+    } else {
+      d = buildDisp(op.op === 'ret' ? before : after, L);
+      animate(d, A.item, u, L, prog);
+      if (op.op === 'init') alpha = easeIO(u);
+    }
+  } else {
+    d = buildDisp(A.state, L);
+  }
+  ctx.save();
+  ctx.globalAlpha *= (o.alpha ?? 1) * alpha;
+  if (o.tf) { ctx.translate(o.tf.x, o.tf.y); ctx.scale(o.tf.s, o.tf.s); }
+  drawDisp(d, L, prog);
+  ctx.restore();
+  return { d, hl: A.hl };
+}
+
+// 注釈（例：「#001 のまま」）。要素の真下に小さな札で出す
+function drawNotes(notes, d, L, alpha) {
+  if (!notes || alpha <= 0) return;
+  for (const n of notes) {
+    let x, y;
+    if (n.at.startsWith('var:')) { const v = d.vars[n.at.slice(4)]; if (!v) continue; x = v.x; y = v.y + L.bh / 2 + 34; }
+    else { const o = d.objs[n.at.slice(4)]; if (!o) continue; x = o.x; y = o.y + L.oh / 2 + 34; }
+    pill(n.text, x + (n.dx || 0), y + (n.dy || 0), { size: 22, col: n.col || C.white, alpha });
+  }
+}
+
+// =========================================================================
+// シーンで使うプログラム
+// =========================================================================
+const CALLER = '呼び出し元', FN = '関数';
+const setupRefByVal = (fnTitle = 'Change') => [
+  { op: 'new', o: '#001', type: 'Box', f: { Value: 10 } },
+  { op: 'decl', v: 'a', type: 'Box' },
+  { op: 'set', v: 'a', val: { k: 'ref', o: '#001' } },
+  { op: 'enter', title: fnTitle },
+  { op: 'copy', v: 'box', type: 'Box', from: 'a' },
+];
+const CALL_AT = [[0, 1], [1, 0]];
+
+const P2 = M.compile({
+  frames: false,
+  code: [{ title: '値型', lines: ['int a = 10;'] }, { title: '参照型', lines: ['Box a = new Box { Value = 10 };'] }],
+  steps: [
+    [
+      { op: 'decl', v: 'a1', name: 'a', type: 'int', pos: { x: 330, y: 440 }, at: [0, 0] },
+      { op: 'set', v: 'a1', val: { k: 'int', v: 10 }, src: 'code', lit: '10', at: [0, 0] },
+    ],
+    [
+      { op: 'new', o: '#001', type: 'Box', f: { Value: 10 }, pos: { x: 960, y: 730 }, at: [1, 0] },
+      { op: 'decl', v: 'a2', name: 'a', type: 'Box', pos: { x: 330, y: 730 }, at: [1, 0] },
+      { op: 'set', v: 'a2', val: { k: 'ref', o: '#001' }, src: 'obj', at: [1, 0] },
+    ],
+    [],
+  ],
+});
+
+const P3v = M.compile({
+  code: [{ title: CALLER, lines: ['int a = 10;', 'Change(a);'] }, { title: FN, lines: ['void Change(int x)', '{', '    x = 20;', '}'] }],
+  steps: [
+    [{ op: 'decl', v: 'a', type: 'int', at: [0, 0] }, { op: 'set', v: 'a', val: { k: 'int', v: 10 }, src: 'code', lit: '10', at: [0, 0] }],
+    [{ op: 'enter', title: 'Change', at: CALL_AT }, { op: 'copy', v: 'x', type: 'int', from: 'a', at: CALL_AT }],
+    [{ op: 'set', v: 'x', val: { k: 'int', v: 20 }, chg: true, src: 'code', lit: '20', at: [1, 2] }],
+  ],
+});
+const P3r = M.compile({
+  code: [{ title: CALLER, lines: ['Box a = new Box { Value = 10 };', 'Change(a);'] }, { title: FN, lines: ['void Change(Box box)', '{', '    // ...', '}'] }],
+  steps: [
+    [
+      { op: 'new', o: '#001', type: 'Box', f: { Value: 10 }, at: [0, 0] },
+      { op: 'decl', v: 'a', type: 'Box', at: [0, 0] },
+      { op: 'set', v: 'a', val: { k: 'ref', o: '#001' }, src: 'obj', at: [0, 0] },
+    ],
+    [{ op: 'enter', title: 'Change', at: CALL_AT }, { op: 'copy', v: 'box', type: 'Box', from: 'a', at: CALL_AT }],
+  ],
+});
+
+const CALLER_BOX = ['Box a = new Box { Value = 10 };', 'Change(a);', 'Console.WriteLine(a.Value);'];
+const P4 = M.compile({
+  code: [{ title: CALLER, lines: CALLER_BOX }, { title: FN, lines: ['void Change(Box box)', '{', '    box.Value = 20;', '}'] }],
+  steps: [
+    [{ op: 'init', ops: setupRefByVal(), at: CALL_AT }],
+    [{ op: 'field', v: 'box', f: 'Value', val: 20, lit: '20', at: [1, 2] }],
+    [{ op: 'ret', at: [1, 3] }, { op: 'print', v: 'a', f: 'Value', at: [0, 2] }],
+    [],
+  ],
+});
+const P5 = M.compile({
+  code: [{ title: CALLER, lines: CALLER_BOX }, { title: FN, lines: ['void Change(Box box)', '{', '    box = new Box { Value = 30 };', '}'] }],
+  steps: [
+    [{ op: 'init', ops: setupRefByVal(), at: CALL_AT }],
+    [
+      { op: 'new', o: '#002', type: 'Box', f: { Value: 30 }, at: [1, 2] },
+      { op: 'set', v: 'box', val: { k: 'ref', o: '#002' }, chg: true, src: 'obj', at: [1, 2] },
+    ],
+    [{ op: 'ret', at: [1, 3] }, { op: 'print', v: 'a', f: 'Value', at: [0, 2] }],
+    [],
+  ],
+});
+
+const P6v = M.compile({
+  code: [{ title: CALLER, lines: ['int a = 10;', 'Change(ref a);'] }, { title: FN, lines: ['void Change(ref int x)', '{', '    x = 20;', '}'] }],
+  steps: [
+    [{ op: 'decl', v: 'a', type: 'int', at: [0, 0] }, { op: 'set', v: 'a', val: { k: 'int', v: 10 }, src: 'code', lit: '10', at: [0, 0] }],
+    [{ op: 'enter', title: 'Change', at: CALL_AT }, { op: 'bind', v: 'x', type: 'ref int', to: 'a', at: CALL_AT }],
+    [{ op: 'set', v: 'x', val: { k: 'int', v: 20 }, chg: true, src: 'code', lit: '20', at: [1, 2] }],
+  ],
+});
+const P6r = M.compile({
+  code: [
+    { title: CALLER, lines: ['Box a = new Box { Value = 10 };', 'Change(ref a);', 'Console.WriteLine(a.Value);'] },
+    { title: FN, lines: ['void Change(ref Box box)', '{', '    box = new Box { Value = 30 };', '}'] },
+  ],
+  steps: [
+    [
+      { op: 'new', o: '#001', type: 'Box', f: { Value: 10 }, at: [0, 0] },
+      { op: 'decl', v: 'a', type: 'Box', at: [0, 0] },
+      { op: 'set', v: 'a', val: { k: 'ref', o: '#001' }, src: 'obj', at: [0, 0] },
+      { op: 'enter', title: 'Change', at: CALL_AT },
+      { op: 'bind', v: 'box', type: 'ref Box', to: 'a', at: CALL_AT },
+    ],
+    [
+      { op: 'new', o: '#002', type: 'Box', f: { Value: 30 }, at: [1, 2] },
+      { op: 'set', v: 'box', val: { k: 'ref', o: '#002' }, chg: true, src: 'obj', at: [1, 2] },
+    ],
+    [{ op: 'ret', at: [1, 3] }, { op: 'print', v: 'a', f: 'Value', at: [0, 2] }],
+  ],
+});
+
+// 比較用の縮小表示では、同じ定義をそのまま使う（別に描き直さないので、本編と動きが必ず一致する）
+const mini = (p) => Object.assign({}, p, { mini: true });
+const QP = M.PATTERNS.map((p) => Object.assign(mini(M.compile(M.patternDef(p))), { pat: p }));
+
+// =========================================================================
+// シーン共通：コード＋可視化＋説明文
+// =========================================================================
+// spec = { p: プログラム, k: ステップ, cap, capBig, notes, hl }
+function progScene(S, title, spec) {
+  header(title);
+  const { p, k } = spec;
+  const total = p.steps[k].total;
+  const r = renderProg(p, k, S.t, L_MAIN);
+  const hl = p.steps[k].ops.length ? r.hl : spec.hl ?? lastAt(p, k);
+  drawPanels(p.code, hl);
+  const ca = easeIO(prog(S.t, total + 150, 450));
+  drawNotes(spec.notes, r.d, L_MAIN, ca);
+  if (spec.capBig) caption(spec.capBig, ca, { size: 54, weight: 800, y: 1000 });
+  else caption(spec.cap, ca);
+}
+function lastAt(p, k) {
+  for (let i = k; i >= 0; i--) { const ops = p.steps[i].ops; if (ops.length) return ops[ops.length - 1].op.at; }
+  return null;
+}
+function sceneOf(title, specs) {
+  return { n: specs.length, draw: (S) => { const sp = specs[S.k]; sp.draw ? sp.draw(S, title) : progScene(S, title, sp); } };
+}
+
+// 左右に並べて、同じ時刻で同時に再生する比較画面
+function compareView(S, items, cap) {
+  const s = 0.64, delay = 350;
+  const fade = easeIO(prog(S.t, 0, 400));
+  items.forEach((it, i) => {
+    const x0 = i ? 980 : 60, y0 = 130, w = 880;
+    ctx.save(); ctx.globalAlpha = fade;
+    rrect(x0, y0, w, 690, 16); ctx.fillStyle = 'rgba(18,26,40,0.55)'; ctx.fill();
+    ctx.strokeStyle = C.line; ctx.lineWidth = 1; ctx.stroke();
+    richText(it.title, x0 + w / 2, y0 + 52, { size: 32, weight: 700, align: 'center' });
+    rrect(x0 + 40, y0 + 80, w - 80, 56, 10); ctx.fillStyle = C.panel; ctx.fill();
+    ctx.restore();
+    ctx.save(); ctx.globalAlpha = fade;
+    ctx.font = `${26}px ${MONO}`;
+    const cw = ctx.measureText(it.code).width;
+    drawCodeLines([it.code], x0 + w / 2 - cw / 2, y0 + 95, { size: 26, w: 0 });
+    ctx.restore();
+    const tf = { x: x0 + (w - 1320 * s) / 2 - 40 * s, y: y0 + 170 - L_MINI.ft * s, s };
+    renderProg(it.p, it.k, S.t - delay, L_MINI, { tf, alpha: fade });
+    const va = easeIO(prog(S.t, delay + it.p.steps[it.k].total + 100, 450));
+    it.verdict.forEach((ln, j) => richText(ln, x0 + w / 2, y0 + 540 + j * 64, { size: j ? 28 : 36, weight: j ? 500 : 800, align: 'center', alpha: va }));
+  });
+  const tot = Math.max(...items.map((it) => it.p.steps[it.k].total));
+  caption(cap, easeIO(prog(S.t, delay + tot + 600, 450)), { y: 950 });
+}
+
+const Y = rgba(C.yellow), CY = rgba(C.cyan), OR = rgba(C.orange), GR = rgba(C.green), SUB = C.sub;
+
+// =========================================================================
+// シーン 1：タイトルと問題提起
+// =========================================================================
+function sTitle(S) {
+  if (S.k === 0) {
+    // 背景にシーン4の完成図をうっすら敷いて、これから見る「箱と矢印」を予告する
+    renderProg(P4, 1, Infinity, L_MAIN, { alpha: 0.13 * easeIO(prog(S.t, 0, 1200)) });
+    const a1 = easeOut(prog(S.t, 150, 800)), a2 = easeOut(prog(S.t, 700, 800));
+    text('値渡しなのに値が変わる？', W / 2, 500, { size: 104, weight: 800, align: 'center', alpha: a1 });
+    text('値型・参照型と値渡し・参照渡しを可視化してみた', W / 2, 600, { size: 40, color: C.sub, align: 'center', alpha: a2 });
+    return;
+  }
+  header('このコード、何が表示される？');
+  const def = { title: '定義', lines: ['class Box', '{', '    public int Value;', '}', '', 'void Change(Box box)', '{', '    box.Value = 20;', '}'] };
+  const call = { title: '呼び出し元', lines: ['Box a = new Box { Value = 10 };', '', 'Change(a);', '', 'Console.WriteLine(a.Value);'] };
+  const a0 = easeIO(prog(S.t, 0, 500));
+  ctx.save(); ctx.globalAlpha = a0;
+  [[def, 80, 860], [call, 980, 860]].forEach(([p, x, w]) => {
+    const h = 9 * CODE.lh + CODE.pad * 2;
+    rrect(x, 110, w, h, 12); ctx.fillStyle = C.panel; ctx.fill(); ctx.strokeStyle = C.line; ctx.lineWidth = 1; ctx.stroke();
+    text(p.title, x + w - 20, 140, { size: 18, color: C.faint, align: 'right' });
+    drawCodeLines(p.lines, x + CODE.pad + 6, 110 + CODE.pad, { w });
+  });
+  ctx.restore();
+  text('※ ref を付けていないので、C# では値渡し', 1000 + CODE.pad, 470, { size: 22, color: C.faint, alpha: a0 });
+  const qa = easeOut(prog(S.t, 900, 700));
+  richText([['結果は ', C.text], ['10', Y], [' ？　それとも ', C.text], ['20', Y], [' ？', C.text]], W / 2, 810, { size: 76, weight: 800, align: 'center', alpha: qa });
+}
+
+// =========================================================================
+// シーン 2：変数には何が入っている？
+// =========================================================================
+function s2(S, title) {
+  header(title);
+  const k = S.k;
+  const r = renderProg(P2, k, S.t, L_MAIN);
+  drawPanels(P2.code, k < 2 ? r.hl : null);
+  // 行ラベル（この場面だけは関数呼び出しが無いので、値型と参照型を上下に並べる）
+  const la = (row) => (row === 0 ? 1 : k >= 1 ? 1 : 0);
+  [['値型', 440, 0], ['参照型', 730, 1]].forEach(([lab, y, row]) => {
+    if (!la(row)) return;
+    text(lab, 90, y - 92, { size: 24, weight: 700, color: C.sub, alpha: row === 1 && k === 1 ? easeIO(prog(S.t, 0, 400)) : 1 });
+  });
+  const ca = easeIO(prog(S.t, P2.steps[k].total + 150, 450));
+  if (k === 0) caption([['値型の変数には、', C.text], ['データそのもの', Y], ['が入る', C.text]], ca);
+  if (k === 1) caption([['参照型の変数には、', C.text], ['オブジェクトへの参照', CY], ['が入る', C.text]], ca);
+  if (k === 2) {
+    drawNotes([{ at: 'var:a1', text: 'データそのもの' }, { at: 'var:a2', text: 'オブジェクトへの参照', col: C.cyan }], r.d, L_MAIN, ca);
+    caption([['どちらも、変数には「', C.text], ['値', Y], ['」が入っている。違うのは中身の種類だけ', C.text]], ca, { y: 955 });
+    text('#001 は説明用の識別子です（実際のメモリアドレスではありません）', W / 2, 1008, { size: 20, color: C.faint, align: 'center', alpha: ca });
+  }
+}
+
+// =========================================================================
+// シーン 3〜6
+// =========================================================================
+const S3 = sceneOf('値渡しは、コピーするだけ', [
+  { p: P3v, k: 0, cap: [['呼び出し元の変数 a に ', C.text], ['10', Y]] },
+  { p: P3v, k: 1, cap: [['引数 x は', C.text], ['新しい変数', Y], ['。a の中身 10 を', C.text], ['コピー', Y], ['する', C.text]] },
+  { p: P3v, k: 2, cap: [['書き換わったのは x だけ。a は ', C.text], ['10 のまま', Y]] },
+  { p: P3r, k: 0, cap: [['今度は参照型。a の中身は ', C.text], ['#001', CY], ['（オブジェクトへの参照）', C.text]] },
+  { p: P3r, k: 1, cap: [['a の中身 ', C.text], ['#001', CY], [' をコピー。', C.text], ['オブジェクトはコピーされない', Y]],
+    notes: [{ at: 'obj:#001', text: 'オブジェクトは 1 つだけ', col: C.green }] },
+  { draw: (S) => compareView(S, [
+    { p: mini(P3v), k: 1, title: [['値型を値渡し', C.text]], code: 'Change(a);   // a は int', verdict: [[['10', Y], [' をコピー', C.text]]] },
+    { p: mini(P3r), k: 1, title: [['参照型を値渡し', C.text]], code: 'Change(a);   // a は Box', verdict: [[['#001', CY], [' をコピー', C.text]], [['→ 2 つの変数が同じオブジェクトを指す', SUB]]] },
+  ], [['値型でも参照型でも、値渡しは同じ「', C.text], ['中身のコピー', Y], ['」', C.text]]) },
+]);
+
+const S4 = sceneOf('参照型を値渡しして、オブジェクトを書き換える', [
+  { p: P4, k: 0, cap: [['a も box も、同じ ', C.text], ['#001', CY], [' を指している', C.text]] },
+  { p: P4, k: 1, cap: [['変わったのは', C.text], ['オブジェクトの中身', Y], ['だけ', C.text]],
+    notes: [{ at: 'var:a', text: '#001 のまま', col: C.cyan }, { at: 'var:box', text: '#001 のまま', col: C.cyan }] },
+  { p: P4, k: 2, capBig: [['値渡しなのに、', C.text], ['20', Y], [' になった！', C.text]] },
+  { p: P4, k: 3, hl: [0, 2], capBig: [['変数は変わっていない。', C.text], ['オブジェクト', Y], ['が変わった。', C.text]],
+    notes: [{ at: 'var:a', text: '中身は #001 のまま', col: C.cyan }, { at: 'obj:#001', text: 'Value：10 → 20', col: C.yellow }] },
+]);
+
+const S5 = sceneOf('参照型を値渡しして、別のオブジェクトを代入する', [
+  { p: P5, k: 0, cap: [['同じ状態から、今度は box に', C.text], ['新しいオブジェクト', GR], ['を代入する', C.text]] },
+  { p: P5, k: 1, cap: [['変わったのは', C.text], ['関数側の変数 box', Y], ['だけ', C.text]],
+    notes: [{ at: 'var:a', text: '#001 のまま', col: C.cyan }, { at: 'var:box', text: '#001 → #002', col: C.yellow }] },
+  { p: P5, k: 2, cap: [['a は #001 を指したまま → ', C.text], ['10', Y]] },
+  { draw: (S) => compareView(S, [
+    { p: mini(P4), k: 1, title: [['前のシーン', C.text]], code: 'box.Value = 20;', verdict: [[['オブジェクト', Y], ['を変える', C.text]], [['→ 同じオブジェクトを見ている a にも見える', SUB]]] },
+    { p: mini(P5), k: 1, title: [['今回', C.text]], code: 'box = new Box { Value = 30 };', verdict: [[['変数', Y], ['を変える', C.text]], [['→ 変わるのは関数側の変数 box だけ', SUB]]] },
+  ], [['オブジェクトを変える', Y], [' と ', C.text], ['変数を変える', Y], [' は、別の操作', C.text]]) },
+]);
+
+const S6 = sceneOf('参照渡しでは何が変わる？', [
+  { p: P6v, k: 0, cap: [['ref を付けて渡す。呼び出し元は a = ', C.text], ['10', Y]] },
+  { p: P6v, k: 1, cap: [['コピーはしない。x は', C.text], ['呼び出し元の変数 a そのもの', OR]] },
+  { p: P6v, k: 2, cap: [['x への代入は a への代入。a が ', C.text], ['20', Y], [' に変わる', C.text]] },
+  { p: P6r, k: 0, cap: [['参照型でも同じ。box は ', C.text], ['a そのもの', OR], ['（#001 のコピーは作らない）', C.text]] },
+  { p: P6r, k: 1, cap: [['呼び出し元の変数 a', OR], [' が ', C.text], ['#002', Y], [' に変わる', C.text]],
+    notes: [{ at: 'var:a', text: '#001 → #002', col: C.yellow }] },
+  { p: P6r, k: 2, cap: [['関数から戻っても、a は #002 のまま → ', C.text], ['30', Y]] },
+  { draw: (S) => compareView(S, [
+    { p: mini(P5), k: 1, title: [['値渡し', C.text]], code: 'void Change(Box box)', verdict: [[['関数側の変数', Y], ['に代入', C.text]], [['→ a は #001 のまま', SUB]]] },
+    { p: mini(P6r), k: 1, title: [['参照渡し', OR]], code: 'void Change(ref Box box)', verdict: [[['呼び出し元の変数', OR], ['に代入', C.text]], [['→ a が #002 に変わる', SUB]]] },
+  ], [['参照渡しの本質は、', C.text], ['呼び出し元の変数そのもの', OR], ['を操作できること', C.text]]) },
+]);
+
+// =========================================================================
+// シーン 7：4パターンを同じモデルで比較
+// =========================================================================
+const QS = 0.62;
+const QUAD = [[50, 120], [975, 120], [50, 540], [975, 540]];
+function quadCode(p, k) {
+  const T = p.vt ? 'ValueBox' : 'ReferenceBox';
+  const sig = `void Change(${p.ref ? 'ref ' : ''}${T} box)`;
+  if (k === 0) return [sig, `Change(${p.ref ? 'ref ' : ''}a);`];
+  if (k === 1) return [sig, '    box.Value = 20;'];
+  return [sig, `    box = new ${T} { Value = 30 };`];
+}
+function drawQuads(S, o = {}) {
+  QP.forEach((qp, i) => {
+    const [x0, y0] = QUAD[i], w = 895, h = 405, p = qp.pat;
+    const k = o.k ?? S.k, t = o.t ?? S.t;
+    ctx.save(); ctx.globalAlpha = o.alpha ?? 1;
+    rrect(x0, y0, w, h, 14); ctx.fillStyle = 'rgba(18,26,40,0.55)'; ctx.fill();
+    ctx.strokeStyle = C.line; ctx.lineWidth = 1; ctx.stroke();
+    richText([[`${i + 1}. `, C.sub], [p.vt ? '値型' : '参照型', p.vt ? C.text : CY], [' × ', C.sub], [p.ref ? '参照渡し' : '値渡し', p.ref ? OR : C.text]], x0 + 24, y0 + 40, { size: 28, weight: 800 });
+    const A = activeAt(qp, k, t);
+    const running = !!A.item && A.item.op.op !== 'init' && A.item.op.op !== 'reset';
+    drawCodeLines(quadCode(p, k), x0 + 318, y0 + 18, { size: 21, lh: 30, w: 572, hl: running || (k > 0 && !A.item) ? new Set([1]) : new Set() });
+    ctx.restore();
+    const tf = { x: x0 + (w - 1320 * QS) / 2 - 40 * QS, y: y0 + 92 - L_MINI.ft * QS, s: QS };
+    renderProg(qp, k, t, L_MINI, { tf, alpha: o.alpha ?? 1 });
+    if (k > 0 && !o.noResult) {
+      // 呼び出し元から見た結果は、表示中の状態から実際に読み出す（表を手書きしない）
+      const v = M.readField(qp.steps[k].end, 'a', 'Value');
+      const ra = easeIO(prog(t, qp.steps[k].total + 100, 400));
+      richText([['呼び出し元の a.Value → ', SUB], [String(v), v === 10 ? C.text : Y]], x0 + w / 2, y0 + h - 18, { size: 28, weight: 800, align: 'center', alpha: ra * (o.alpha ?? 1) });
+    }
+  });
+}
+function s7(S, title) {
+  header(title);
+  drawQuads(S);
+  const total = Math.max(...QP.map((q) => q.steps[S.k].total));
+  const ca = easeIO(prog(S.t, total + 300, 450));
+  if (S.k === 0) caption([['4 つとも同じ箱と矢印のモデル。呼び出し直後の状態', C.text]], ca);
+  if (S.k === 1) caption([['操作A ', SUB], ['box.Value = 20;', Y], ['　→ 値型の値渡しだけ、呼び出し元に届かない', C.text]], ca, { size: 34 });
+  if (S.k === 2) caption([['操作B ', SUB], ['box = new …;', Y], ['　→ 参照渡しだけ、呼び出し元の変数が変わる', C.text]], ca, { size: 34 });
+}
+
+// =========================================================================
+// シーン 8：まとめ
+// =========================================================================
+function s8(S) {
+  drawQuads(S, { k: 2, t: Infinity, alpha: 0.08 * easeIO(prog(S.t, 0, 900)), noResult: true });
+  const a0 = easeOut(prog(S.t, 200, 700));
+  text('4パターン、覚える必要はありません。', W / 2, 260, { size: 72, weight: 800, align: 'center', alpha: a0 });
+  const items = [
+    [['① ', Y], ['変数には何が入っている？', C.text]],
+    [['② ', Y], ['コピーする？　', C.text], ['元の変数を操作する？', OR]],
+    [['③ ', Y], ['変数を変える？　', C.text], ['オブジェクトを変える？', GR]],
+  ];
+  items.forEach((it, i) => richText(it, 560, 450 + i * 110, { size: 54, weight: 700, alpha: easeOut(prog(S.t, 1100 + i * 700, 600)) }));
+  text('仕組みがわかれば、結果は自分で導き出せる。', W / 2, 900, { size: 46, weight: 700, color: rgba(C.yellow), align: 'center', alpha: easeOut(prog(S.t, 3500, 800)) });
+}
+
+// =========================================================================
+// ステップ管理とナビゲーション
+// =========================================================================
+const SCENES = [
+  { name: 'タイトル', n: 2, draw: sTitle },
+  { name: '変数には何が入っている？', n: 3, draw: (S) => s2(S, '変数には何が入っている？') },
+  { name: '値渡しはコピー', ...S3, draw: (S) => S3.draw(S) },
+  { name: 'オブジェクトを書き換える', ...S4 },
+  { name: '別のオブジェクトを代入する', ...S5 },
+  { name: '参照渡し', ...S6 },
+  { name: '4パターンの比較', n: 3, draw: (S) => s7(S, '4パターンを同じモデルで比べる') },
+  { name: 'まとめ', n: 1, draw: s8 },
+];
+const STEPS = [];
+SCENES.forEach((sc, si) => { for (let k = 0; k < sc.n; k++) STEPS.push({ si, k }); });
+
+let cur = 0, enterAt = performance.now(), animate_ = true;
+function go(i, anim) {
+  i = clamp(i, 0, STEPS.length - 1);
+  cur = i;
+  enterAt = performance.now();
+  animate_ = anim;
+  // リロードしても同じステップから再開できるよう URL に残す（リハーサル用）
+  history.replaceState(null, '', '#' + (cur + 1));
+  updateHud();
+}
+const next = () => { if (cur < STEPS.length - 1) go(cur + 1, true); };
+const prev = () => { if (cur > 0) go(cur - 1, false); };
+
+const hudName = document.getElementById('sceneName'), hudDots = document.getElementById('dots'), hudStep = document.getElementById('stepNo');
+hudDots.innerHTML = SCENES.map(() => '<i></i>').join('');
+function updateHud() {
+  const { si, k } = STEPS[cur];
+  hudName.textContent = `${si + 1}. ${SCENES[si].name}`;
+  [...hudDots.children].forEach((el, j) => (el.className = j < si ? 'done' : j === si ? 'cur' : ''));
+  hudStep.textContent = SCENES[si].n > 1 ? `step ${k + 1}/${SCENES[si].n}` : '';
+}
+
+function frame(now) {
+  const { si, k } = STEPS[cur];
+  const lt = now - enterAt;
+  const S = { k, t: animate_ ? lt : Infinity, lt };
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+  SCENES[si].draw(S);
+  requestAnimationFrame(frame);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const map = { ArrowRight: next, ' ': next, PageDown: next, Enter: next, ArrowLeft: prev, PageUp: prev, Backspace: prev,
+    Home: () => go(0, true), End: () => go(STEPS.length - 1, false), r: () => go(cur, true), f: toggleFs };
+  const fn = map[e.key];
+  if (!fn) return;
+  e.preventDefault();
+  if (e.repeat && (e.key === 'r' || e.key === 'f')) return;
+  fn();
+});
+document.getElementById('app').addEventListener('click', (e) => {
+  (e.clientX >= window.innerWidth / 2 ? next : prev)();
+});
+function bindBtn(id, fn) {
+  const el = document.getElementById(id);
+  // フォーカスを持たせない：Space キーでボタンが押されて二重に進むのを防ぐ
+  el.addEventListener('mousedown', (e) => e.preventDefault());
+  // 背景（#app）の左右クリック判定に伝わると二重に進む/戻るので止める
+  el.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+}
+function toggleFs() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen?.();
+}
+bindBtn('prev', prev);
+bindBtn('next', next);
+bindBtn('fs', toggleFs);
+
+const fromHash = parseInt(location.hash.slice(1), 10);
+go(Number.isFinite(fromHash) ? fromHash - 1 : 0, true);
+requestAnimationFrame(frame);
+
+// 動作確認用（ブラウザのコンソールや自動テストから参照）
+window.__deck = { go, get cur() { return cur; }, total: STEPS.length, steps: STEPS, model: M, programs: { P2, P3v, P3r, P4, P5, P6v, P6r, QP } };
+</script>
+</body>
+</html>

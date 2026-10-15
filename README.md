@@ -5,6 +5,7 @@
 | ディレクトリ | 内容 |
 |---|---|
 | [btree-rtree/](btree-rtree/) | B-treeとR-treeを可視化してみた（なぜXYの複合インデックスでは足りないのか？） |
+| [value-reference/](value-reference/) | 値渡しなのに値が変わる？（値型・参照型と値渡し・参照渡しを可視化してみた） |
 
 ## 追加するとき
 

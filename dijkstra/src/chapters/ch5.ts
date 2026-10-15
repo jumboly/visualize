@@ -195,7 +195,9 @@ export const ch5: ChapterDef = {
           duration: n,
           stops: [...Array(n).keys()].map((i) => i + 1),
           rate: Math.max(4, n / (kind === 'upper' ? 6 : 4)),
-          render(k) {
+          render(time) {
+            // 再生位置は連続値なので、確定したノード数（整数）に直してから使う
+            const k = Math.floor(time + 1e-9);
             paint(pBack, h.rg, q.back, kind === 'back' ? k : Infinity, inside(h.rg, rt()));
             paint(pFwd, g, q.fwd, kind === 'back' ? 0 : kind === 'fwd' ? k : Infinity, inside(g, rs()));
             if (kind === 'upper') {
@@ -242,7 +244,8 @@ export const ch5: ChapterDef = {
           duration: n,
           stops: [nh, np].sort((a, b) => a - b),
           rate: n / 7,
-          render(k) {
+          render(time) {
+            const k = Math.floor(time + 1e-9);
             paint(pPlain, g, plain, k);
             setPathLeft(k >= np);
             paint(pBack, h.rg, q.back, k, inside(h.rg, rt()));

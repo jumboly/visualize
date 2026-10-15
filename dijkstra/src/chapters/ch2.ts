@@ -115,7 +115,9 @@ export const ch2: ChapterDef = {
       const ts = new Set(targets() ?? []);
       const chips = order
         .map((v, i) => {
-          const cls = ['chip', i < st.settledCount ? 'on' : '', ts.has(v) ? 'tgt' : '', i === st.settledCount - 1 ? 'cur' : ''].join(' ');
+          // 右端に近い印は左向きに出す（帯の外にはみ出して読めなくなるのを防ぐ）
+          const nearEnd = i >= order.length - 4;
+          const cls = ['chip', i < st.settledCount ? 'on' : '', ts.has(v) ? 'tgt' : '', i === st.settledCount - 1 ? 'cur' : '', nearEnd ? 'near-end' : ''].join(' ');
           const marks = stopMarks
             .filter((m) => m.count === i + 1)
             .map((m) => `<span class="stop">${m.label}</span>`)

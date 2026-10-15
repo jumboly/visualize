@@ -85,6 +85,9 @@ export function startApp(root: HTMLElement, chapters: ChapterDef[]): void {
     const beats = current.handle.beats;
     const b = Math.max(0, Math.min(beats.length - 1, beat));
     current.beat = b;
+    // 範囲外の番号（前の章の末尾へ戻るときの 99 など）は、実際の場面の URL に直しておく
+    const want = `#/${no}/${b + 1}`;
+    if (location.hash !== want) history.replaceState(null, '', want);
     $('.dots').innerHTML = beats
       .map((x, i) => `<button class="dot ${i === b ? 'on' : i < b ? 'done' : ''}" data-i="${i}" title="${i + 1}. ${x.title}"></button>`)
       .join('');
@@ -118,13 +121,17 @@ export function startApp(root: HTMLElement, chapters: ChapterDef[]): void {
   function route(): void {
     const m = location.hash.match(/^#\/(\d+)(?:\/(\d+))?/);
     if (!m) return showHome();
-    openChapter(Number(m[1]), m[2] ? Number(m[2]) - 1 : 0);
+    const no = Number(m[1]);
+    const beat = m[2] ? Number(m[2]) - 1 : 0;
+    // 戻るボタンなどで同じ場面に二重に入らないようにする（入るたびにアニメーションが最初からになるため）
+    if (current && current.def.no === no && current.beat === beat && m[2]) return;
+    openChapter(no, beat);
   }
 
   function go(no: number, beat: number): void {
-    const h = `#/${no}/${beat + 1}`;
-    if (location.hash === h) route();
-    else location.hash = h;
+    // hashchange は非同期なので、キーを素早く連打しても取りこぼさないよう、その場で状態を進める
+    history.pushState(null, '', `#/${no}/${beat + 1}`);
+    route();
   }
 
   function nextBeat(dir: 1 | -1): void {
@@ -138,9 +145,8 @@ export function startApp(root: HTMLElement, chapters: ChapterDef[]): void {
       // 章末で進むと次の章へ（発表を止めずに流せるように）
       if (idx + 1 < chapters.length) go(chapters[idx + 1].no, 0);
     } else if (n < 0) {
-      if (idx > 0) {
-        location.hash = `#/${chapters[idx - 1].no}/99`;
-      } else location.hash = '#/';
+      if (idx > 0) go(chapters[idx - 1].no, 98);
+      else location.hash = '#/';
     } else go(current.def.no, n);
   }
 
@@ -226,5 +232,6 @@ export function startApp(root: HTMLElement, chapters: ChapterDef[]): void {
   });
 
   window.addEventListener('hashchange', route);
+  window.addEventListener('popstate', route);
   route();
 }

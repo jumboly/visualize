@@ -151,7 +151,13 @@ export const ch6: ChapterDef = {
         .map((t, i) => `<li class="${i === cur ? 'cur' : ''} ${i === bi ? 'best' : ''}"><span>${i === bi ? '★ ' : ''}${fmtTour(t)}</span><b>${Number.isFinite(t.cost) ? t.cost.toFixed(2) + '分' : '巡回不可'}</b></li>`)
         .join('');
       toursEl.innerHTML = `<div class="tours-head">訪問順序の候補 ${n} / ${tours.length} 通り</div><ol>${rows}</ol>`;
-      toursEl.querySelector('li.cur')?.scrollIntoView({ block: 'nearest' });
+      // scrollIntoView は外側のステージまでスクロールさせてしまうので、一覧の中だけを動かす
+      const ol = toursEl.querySelector('ol');
+      const li = toursEl.querySelector('li.cur') as HTMLElement | null;
+      if (ol && li) {
+        const top = li.offsetTop - ol.offsetTop;
+        if (top < ol.scrollTop || top + li.offsetHeight > ol.scrollTop + ol.clientHeight) ol.scrollTop = top - ol.clientHeight / 2;
+      }
     }
 
     // ---- 左側：抽象化したグラフ ----

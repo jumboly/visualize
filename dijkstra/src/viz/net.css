@@ -141,9 +141,10 @@ svg.net { font-family: var(--sans); user-select: none; -webkit-user-select: none
 .compare tr.hl td { color: var(--accent); font-weight: 700; }
 #app.present .compare table { font-size: 16px; }
 #app.present .chip b { font-size: 18px; }
-/* 帯の右端では印を内側に出す（はみ出して見えなくなるのを防ぐ） */
-.chip:last-child .stops { left: auto; right: -1px; border-left: 0; border-right: 3px solid var(--accent); text-align: right; }
-.chip:last-child .stops .stop { padding: 0 4px 0 0; }
+/* 帯の右端に近い印は線の左側に文字を出す（はみ出して見えなくなるのを防ぐ） */
+.chip.near-end .stops .stop { position: absolute; right: 4px; padding: 0; }
+.chip.near-end .stops .stop + .stop { top: 14px; }
+.chip:last-child .stops { left: auto; right: -1px; border-left: 0; border-right: 3px solid var(--accent); }
 
 /* ---------- 街（第3章以降） ---------- */
 .net-road .river { fill: #10314f; }
@@ -276,6 +277,13 @@ table.odm { border-collapse: collapse; width: 100%; font-family: var(--mono); fo
 .order-no text { fill: #111; font-weight: 700; font-size: 32px; }
 #app.present table.odm { font-size: 18px; }
 @media (max-width: 900px) {
-  .od-layout { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
-  .od-side { border-left: 0; border-top: 1px solid var(--line); max-height: 45%; }
+  /* auto 行は中身の高さまで伸びて地図を潰すので、割合で固定する */
+  .od-layout { grid-template-columns: 1fr; grid-template-rows: 55% 45%; }
+  .od-side { border-left: 0; border-top: 1px solid var(--line); }
+}
+/* 地図の縦横比は約 1.58。ステージがそれより縦長なら、左右より上下に並べたほうが地図が大きく描ける */
+.stage:has(.dual) { container-type: size; }
+@container (max-aspect-ratio: 1577/1000) {
+  .dual { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+  .dual.single { grid-template-columns: 1fr; grid-template-rows: 0 1fr; }
 }

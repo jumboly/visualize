@@ -6,6 +6,7 @@
 |---|---|
 | [btree-rtree/](btree-rtree/) | B-treeとR-treeを可視化してみた（なぜXYの複合インデックスでは足りないのか？） |
 | [value-reference/](value-reference/) | 値渡しなのに値が変わる？（値型・参照型と値渡し・参照渡しを可視化してみた） |
+| [dijkstra/](dijkstra/) | ダイクストラ法を可視化して腹に落とす（6章構成のインタラクティブ教材。TypeScript + Vite。ビルド済みの `dist/index.html` を直接開ける） |
 
 ## 追加するとき
 

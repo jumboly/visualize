@@ -50,15 +50,15 @@ svg.net { font-family: var(--sans); user-select: none; -webkit-user-select: none
 .m-target .ring { stroke: var(--accent); stroke-dasharray: 4 3; }
 .m-visit .ring { stroke: #f0a5ff; }
 .marker .tag rect { fill: #0b0f17; stroke-width: 2; }
-.marker .tag text { font-size: 14px; font-weight: 700; }
+.marker .tag text { font-weight: 700; }
 .m-start .tag rect { stroke: var(--green); }
 .m-start .tag text { fill: var(--green); }
 .m-goal .tag rect, .m-target .tag rect { stroke: var(--accent); }
 .m-goal .tag text, .m-target .tag text { fill: var(--accent); }
 .m-visit .tag rect { stroke: #f0a5ff; }
 .m-visit .tag text { fill: #f0a5ff; }
-.net-road .marker .ring { stroke-width: 3.5; }
-.net-road .marker .tag text { font-size: 18px; }
+.net-road .marker .ring { stroke-width: 6; }
+.net-road .marker .tag rect { stroke-width: 3; }
 
 /* 目的地が確定した瞬間に一度だけ光らせる */
 .marker.reached .ring { stroke-dasharray: none; animation: reached .8s ease-out; }
@@ -135,7 +135,7 @@ svg.net { font-family: var(--sans); user-select: none; -webkit-user-select: none
 .chip .stops:hover .stop { display: block; }
 .compare table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
 .compare th { font-weight: 400; color: var(--sub); font-size: 11px; text-align: right; }
-.compare td { padding: 3px 4px; border-top: 1px solid var(--line); text-align: right; font-family: var(--mono); }
+.compare td { white-space: nowrap; padding: 3px 4px; border-top: 1px solid var(--line); text-align: right; font-family: var(--mono); }
 .compare td:first-child { text-align: left; font-family: var(--sans); }
 .compare tr.sum td { color: #ff9e7a; }
 .compare tr.hl td { color: var(--accent); font-weight: 700; }
@@ -144,3 +144,49 @@ svg.net { font-family: var(--sans); user-select: none; -webkit-user-select: none
 /* 帯の右端では印を内側に出す（はみ出して見えなくなるのを防ぐ） */
 .chip:last-child .stops { left: auto; right: -1px; border-left: 0; border-right: 3px solid var(--accent); text-align: right; }
 .chip:last-child .stops .stop { padding: 0 4px 0 0; }
+
+/* ---------- 街（第3章以降） ---------- */
+.net-road .river { fill: #10314f; }
+.park { fill: #13261d; stroke: #1f3d2c; stroke-width: 2; }
+.rail-base { stroke: #3d4352; stroke-width: 9; }
+.rail-ties { stroke: #0b0f17; stroke-width: 5; stroke-dasharray: 3 14; }
+.city-label { fill: #8b97ab; font-size: 26px; paint-order: stroke; stroke: #0b0f17; stroke-width: 6px; pointer-events: none; }
+.city-label.river-name { fill: #4f8cc0; font-size: 34px; letter-spacing: .3em; }
+.city-label.rail-name { fill: #7a8294; text-anchor: start; }
+.city-label.park-name { fill: #4f8a65; }
+.city-label.express-name { fill: #4fb49a; }
+
+.net-road .road { stroke-linecap: round; cursor: pointer; }
+.net-road .road.c-local { stroke: #36435b; stroke-width: 6; }
+.net-road .road.c-arterial { stroke: #5b6d8f; stroke-width: 12; }
+.net-road .road.c-narrow { stroke: #2d384c; stroke-width: 3.5; }
+.net-road .road.c-path { stroke: #4b7a5c; stroke-width: 3.5; stroke-dasharray: 8 7; }
+.net-road .road.c-expressway { stroke: #2a7d68; stroke-width: 16; }
+.net-road .road.c-ramp { stroke: #2a7d68; stroke-width: 6; }
+.net-road .road.bridge { stroke-linecap: butt; }
+.net-road .road.bridge.c-arterial { stroke: #7f91b3; }
+.net-road .road.bridge.c-narrow { stroke: #8a95a8; stroke-width: 6; }
+.net-road .road.bridge.c-path { stroke: #6fae84; stroke-width: 5; }
+.net-road .road:hover { stroke: #a8b5cc; }
+.net-road .road.slow { stroke: #e08a3c !important; }
+.net-road .road.closed { stroke: var(--red) !important; stroke-dasharray: 10 8 !important; }
+.net-road .wave { stroke-width: 9; stroke-opacity: .85; }
+.net-road .path { stroke-width: 11; }
+.net-road .path.alt { stroke-width: 9; stroke-dasharray: 20 14; }
+.net-road .node .body { r: 5; }
+.net-road .node.unreached .body { fill: #222b3b; stroke: none; }
+.oneway-arrow { fill: #c9d3e3; pointer-events: none; }
+.closed-x { stroke: var(--red); stroke-width: 7; stroke-linecap: round; pointer-events: none; }
+
+/* 「ダイクストラ法から見える世界」：探索グラフのエッジだけを描く */
+.gview .road { visibility: hidden; }
+.gview .city-label, .gview .river, .gview .park, .gview .rail-base, .gview .rail-ties { opacity: .15; }
+.gedge { stroke: #8fa3c4; stroke-width: 3; }
+.gedge.one { stroke: #e8c46a; }
+.gone { stroke: var(--red); stroke-width: 3; stroke-dasharray: 4 10; opacity: .55; }
+.garrow { fill: #e8c46a; }
+.c-alt { color: var(--cyan); }
+.sw-alt, .sw-cur { display: inline-block; width: 18px; height: 0; vertical-align: middle; margin-right: 6px; }
+.sw-alt { border-top: 3px dashed var(--cyan); }
+.sw-cur { border-top: 4px solid var(--accent); }
+.compare tr.pin td { color: var(--cyan); }

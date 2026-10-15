@@ -24,6 +24,8 @@ export interface PathSpec {
   cls?: string;
   /** 0..1 で描きかけの経路を表す（未指定なら全体） */
   progress?: number;
+  /** エッジ id の解釈に使うグラフ（条件の違う経路を並べて描くとき用。省略時は setGraph したもの） */
+  g?: SearchGraph;
 }
 
 type LayerName = 'under' | 'roads' | 'wave' | 'path' | 'over-roads' | 'nodes' | 'markers' | 'over';
@@ -189,15 +191,18 @@ export class NetworkView {
     for (const m of markers) {
       const p = this.pos(m.node);
       const g = el('g', { class: `marker m-${m.kind}`, transform: `translate(${p.x},${p.y})` }, layer);
-      const r = this.style === 'graph' ? 27 : 11;
-      el('circle', { r, class: 'ring' }, g);
+      // 道路網は縮小表示されるので、マーカーは世界座標で大きめに描く
+      const big = this.style === 'road';
+      el('circle', { r: big ? 20 : 27, class: 'ring' }, g);
       if (m.label) {
-        // ノード名（左上）と重ならないよう、タグはノードの下に出す
-        const dy = this.style === 'graph' ? 44 : -20;
+        // ノード名（左上）と重ならないよう、第1章のグラフではタグをノードの下に出す
+        const dy = big ? -46 : 44;
         const t = el('g', { class: 'tag', transform: `translate(0,${dy})` }, g);
-        const w = m.label.length * (this.style === 'graph' ? 15 : 13) + 14;
-        el('rect', { x: -w / 2, y: -12, width: w, height: 24, rx: 12 }, t);
-        el('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' }, t).textContent = m.label;
+        const fs = big ? 28 : 15;
+        const w = [...m.label].reduce((s, ch) => s + (ch.charCodeAt(0) > 255 ? fs : fs * 0.6), 0) + fs;
+        const h = big ? 42 : 24;
+        el('rect', { x: -w / 2, y: -h / 2, width: w, height: h, rx: h / 2 }, t);
+        el('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': fs }, t).textContent = m.label;
       }
     }
   }
@@ -206,10 +211,10 @@ export class NetworkView {
   setPaths(paths: PathSpec[], g: SearchGraph | null = this.g): void {
     const layer = this.layer('path');
     layer.innerHTML = '';
-    if (!g) return;
     for (const p of paths) {
-      if (p.edges.length === 0) continue;
-      const pts = [g.edges[p.edges[0]].from, ...p.edges.map((id) => g.edges[id].to)].map((v) => this.net.nodes[v]);
+      const pg = p.g ?? g;
+      if (!pg || p.edges.length === 0) continue;
+      const pts = [pg.edges[p.edges[0]].from, ...p.edges.map((id) => pg.edges[id].to)].map((v) => this.net.nodes[v]);
       const d = pts.map((q, i) => `${i ? 'L' : 'M'}${q.x},${q.y}`).join('');
       const attrs: Record<string, string | number> = { d, class: `path ${p.cls ?? ''}` };
       if (p.progress !== undefined) {

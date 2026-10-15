@@ -1,5 +1,6 @@
 import { ch1 } from './ch1';
 import { ch2 } from './ch2';
+import { ch3 } from './ch3';
 import type { ChapterDef } from './types';
 
 /** まだ実装していない章の仮置き。Phase ごとに本物へ差し替える。 */
@@ -26,7 +27,7 @@ function placeholder(no: number, title: string, model: string): ChapterDef {
 export const chapters: ChapterDef[] = [
   ch1,
   ch2,
-  placeholder(3, '道路ネットワークの世界', '最短経路は、道路のコストと通行可能性で決まる'),
+  ch3,
   placeholder(4, '波紋から商圏を作る', '最短コストの探索結果を、面の情報に変換する'),
   placeholder(5, '階層探索で高速化する', 'アルゴリズムだけでなく、探索する対象の構造を工夫する'),
   placeholder(6, '巡回セールスマン問題', 'ダイクストラ法の結果を、別の最適化問題の入力にする'),

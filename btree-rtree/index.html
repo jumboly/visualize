@@ -1,0 +1,1001 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B-treeとR-tree</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --fg: #e6edf3;
+    --sub: #9aa7b8;
+    --nav: rgba(230, 237, 243, 0.28);
+  }
+  html, body {
+    margin: 0; height: 100%; background: #05070b; color: var(--fg); overflow: hidden;
+    font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", sans-serif;
+    /* ダブルクリックでの文字選択が発表中に出ないようにする */
+    user-select: none; -webkit-user-select: none;
+  }
+  #app { position: fixed; inset: 0; display: grid; place-items: center; cursor: default; }
+  canvas { display: block; background: var(--bg); }
+  .nav {
+    position: fixed; bottom: 18px; width: 52px; height: 52px; border-radius: 50%;
+    border: 1px solid var(--nav); background: rgba(11, 15, 23, 0.6); color: var(--sub);
+    font-size: 26px; line-height: 1; cursor: pointer; opacity: 0.45; transition: opacity .2s, color .2s;
+  }
+  .nav:hover { opacity: 1; color: var(--fg); }
+  #prev { left: 18px; }
+  #next { right: 18px; }
+  #fs { bottom: auto; top: 14px; right: 14px; width: 38px; height: 38px; font-size: 16px; opacity: 0.25; }
+  #hud {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 14px; align-items: center; font-size: 13px; color: var(--sub);
+    opacity: 0.55; pointer-events: none; white-space: nowrap;
+  }
+  #dots { display: flex; gap: 5px; }
+  #dots i { width: 7px; height: 7px; border-radius: 50%; background: #2a3342; display: block; }
+  #dots i.done { background: #4c5a70; }
+  #dots i.cur { background: #e6edf3; }
+</style>
+</head>
+<body>
+<div id="app"><canvas id="cv"></canvas></div>
+<button id="prev" class="nav" tabindex="-1" aria-label="前へ">‹</button>
+<button id="next" class="nav" tabindex="-1" aria-label="次へ">›</button>
+<button id="fs" class="nav" tabindex="-1" aria-label="フルスクリーン">⛶</button>
+<div id="hud"><span id="sceneName"></span><span id="dots"></span><span id="stepNo"></span></div>
+
+<script src="model.js"></script>
+<script>
+'use strict';
+/* =========================================================================
+ * 設計メモ
+ * - 画面は「ステップ番号 k と、そのステップに入ってからの経過時間 t」の純粋関数として毎フレーム描く。
+ *   アニメーション状態を持たないので、途中で前後移動・連打しても表示が破綻しない。
+ * - 前に進むときは t=0 から再生、戻る/ジャンプするときは t=∞（完了状態）で描く。
+ * - 探索結果は model.js が事前に計算したイベント列であり、ここでは再生するだけ。
+ * ========================================================================= */
+
+const W = 1920, H = 1080, TAU = Math.PI * 2;
+const MONO = '"SF Mono", Menlo, Consolas, "Courier New", monospace';
+const SANS = '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", sans-serif';
+
+const M = SpatialModel.build(9);
+const PTS = M.points, NP = PTS.length, Q = M.query;
+const { order: ORDER, rank: RANK } = M.bt;
+const BR = M.bres, RR = M.rres, RT = M.rt;
+const LO = BR.lo, HI = BR.hi, NSCAN = HI - LO;
+if (!M.resultsMatch) console.error('B-tree と R-tree の検索結果が一致しません');
+
+const C = {
+  bg: '#0b0f17', panel: '#121a28', grid: '#18202d', axis: '#33405a', text: '#e6edf3', sub: '#9aa7b8', faint: '#5b6678',
+  point: [150, 160, 178], blue: [77, 163, 255], green: [61, 220, 132], dim: [40, 47, 59], dimX: [66, 78, 100],
+  yellow: [255, 209, 102], cyan: [95, 211, 230], red: [255, 107, 107], white: [240, 244, 250],
+};
+const LEVEL_COL = [[200, 240, 255], [150, 232, 255], [95, 211, 230], [62, 160, 182]];
+
+// ---------- 汎用ヘルパー ----------
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, u) => a + (b - a) * u;
+const easeIO = (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
+const easeOut = (u) => 1 - Math.pow(1 - u, 3);
+const prog = (t, delay, dur) => (dur <= 0 ? (t >= delay ? 1 : 0) : clamp((t - delay) / dur));
+// ステップ K の進捗。K より後のステップでは常に完了、前では未開始として扱う（前後移動の整合性の要）。
+const P = (S, K, delay = 0, dur = 600, ease = easeIO) => (S.k > K ? 1 : S.k < K ? 0 : ease(prog(S.t, delay, dur)));
+// ステップ a〜b の間だけ表示し、b の次のステップ冒頭でフェードアウトさせる。
+function vis(S, a, b = Infinity, delay = 0, dur = 500) {
+  if (S.k < a || S.k > b + 1) return 0;
+  if (S.k === a) return easeIO(prog(S.t, delay, dur));
+  if (S.k <= b) return 1;
+  return 1 - easeIO(prog(S.t, 0, 350));
+}
+const mixc = (a, b, u) => [lerp(a[0], b[0], u), lerp(a[1], b[1], u), lerp(a[2], b[2], u)];
+const rgba = (c, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+const lerpRect = (a, b, u) => ({ x: lerp(a.x, b.x, u), y: lerp(a.y, b.y, u), s: lerp(a.s, b.s, u) });
+const fmt = (n) => n.toLocaleString('en-US');
+function hsl2rgb(h, s, l) {
+  s /= 100; l /= 100;
+  const k = (n) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [255 * f(0), 255 * f(8), 255 * f(4)];
+}
+// x の値を色相にする：インデックスに並べたとき色のグラデーションで「x 昇順」が一目でわかるように。
+const hueOf = (x) => hsl2rgb(20 + x * 2.6, 75, 62);
+const HUE = PTS.map((p) => hueOf(p.x));
+const inQ = (p) => p.x >= Q.minX && p.x <= Q.maxX && p.y >= Q.minY && p.y <= Q.maxY;
+const IN_Q = PTS.map(inQ);
+const IN_X = PTS.map((p) => p.x >= Q.minX && p.x <= Q.maxX);
+
+// ---------- Canvas ----------
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let scale = 1;
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+  cv.style.width = W * scale + 'px';
+  cv.style.height = H * scale + 'px';
+  cv.width = Math.round(W * scale * dpr);
+  cv.height = Math.round(H * scale * dpr);
+  ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+function text(str, x, y, o = {}) {
+  ctx.save();
+  ctx.globalAlpha *= o.alpha ?? 1;
+  ctx.font = `${o.weight || 400} ${o.size || 28}px ${o.mono ? MONO : SANS}`;
+  ctx.fillStyle = o.color || C.text;
+  ctx.textAlign = o.align || 'left';
+  ctx.textBaseline = o.baseline || 'alphabetic';
+  ctx.fillText(str, x, y);
+  ctx.restore();
+}
+// 色分けした語句を1行に並べる（[文字列, 色] の配列）。中央揃えにも対応。
+function richText(parts, x, y, o = {}) {
+  ctx.save();
+  ctx.globalAlpha *= o.alpha ?? 1;
+  ctx.font = `${o.weight || 400} ${o.size || 28}px ${SANS}`;
+  ctx.textBaseline = 'alphabetic';
+  const total = parts.reduce((s, [str]) => s + ctx.measureText(str).width, 0);
+  let cx = o.align === 'center' ? x - total / 2 : x;
+  for (const [str, col] of parts) {
+    ctx.fillStyle = col || C.text;
+    ctx.fillText(str, cx, y);
+    cx += ctx.measureText(str).width;
+  }
+  ctx.restore();
+}
+function rrect(x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+}
+function header(title, alpha = 1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = rgba(C.yellow);
+  ctx.fillRect(80, 40, 6, 36);
+  text(title, 104, 72, { size: 38, weight: 700 });
+  ctx.restore();
+}
+function caption(str, y, alpha, o = {}) {
+  if (alpha <= 0) return;
+  text(str, o.x ?? W / 2, y, { size: o.size || 34, weight: o.weight || 600, align: o.align || 'center', alpha, color: o.color });
+}
+
+const KW = new Set(['CREATE', 'TABLE', 'INTEGER', 'DOUBLE', 'PRECISION', 'INDEX', 'ON', 'SELECT', 'FROM', 'WHERE', 'BETWEEN', 'AND']);
+function drawCode(lines, x, y, o = {}) {
+  const size = o.size || 26, lh = Math.round(size * 1.5), pad = 22;
+  ctx.save();
+  ctx.globalAlpha *= o.alpha ?? 1;
+  ctx.font = `${size}px ${MONO}`;
+  const w = o.w || Math.max(...lines.map((l) => ctx.measureText(l).width)) + pad * 2;
+  const h = lines.length * lh + pad * 2 - (lh - size) + 6;
+  rrect(x, y, w, h, 12);
+  ctx.fillStyle = C.panel; ctx.fill();
+  ctx.strokeStyle = '#223047'; ctx.lineWidth = 1; ctx.stroke();
+  lines.forEach((ln, li) => {
+    const by = y + pad + li * lh;
+    const hl = o.hl && o.hl[li];
+    if (hl && hl[1] > 0) {
+      ctx.fillStyle = rgba(hl[0], 0.22 * hl[1]);
+      ctx.fillRect(x + 6, by - 6, (w - 12) * hl[1], lh);
+      ctx.fillStyle = rgba(hl[0], hl[1]);
+      ctx.fillRect(x + 6, by - 6, 4, lh);
+    }
+    let cx = x + pad;
+    ctx.textBaseline = 'top';
+    for (const tok of ln.match(/\s+|[A-Za-z_]+|\d+(?:\.\d+)?|./g) || []) {
+      ctx.fillStyle = KW.has(tok) ? '#d2a8ff' : /^\d/.test(tok) ? '#ffa657' : /^[A-Za-z_]/.test(tok) ? C.text : '#8b949e';
+      ctx.fillText(tok, cx, by);
+      cx += ctx.measureText(tok).width;
+    }
+  });
+  ctx.restore();
+  return { w, h };
+}
+
+// ---------- XY 平面 ----------
+const L_FULL = { x: 150, y: 140, s: 850 };
+const L_TOP = { x: 130, y: 112, s: 440 };
+const L_LEFT = { x: 200, y: 175, s: 580 };
+const L_RIGHT = { x: 1140, y: 175, s: 580 };
+const sx = (R, x) => R.x + (x / 100) * R.s;
+const sy = (R, y) => R.y + (1 - y / 100) * R.s;
+
+function drawPlane(R, alpha = 1) {
+  if (alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.fillStyle = '#0d131e';
+  ctx.fillRect(R.x, R.y, R.s, R.s);
+  ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
+  for (let v = 20; v < 100; v += 20) {
+    ctx.beginPath();
+    ctx.moveTo(sx(R, v), R.y); ctx.lineTo(sx(R, v), R.y + R.s);
+    ctx.moveTo(R.x, sy(R, v)); ctx.lineTo(R.x + R.s, sy(R, v));
+    ctx.stroke();
+  }
+  ctx.strokeStyle = C.axis; ctx.lineWidth = 1.5;
+  ctx.strokeRect(R.x, R.y, R.s, R.s);
+  const fs = Math.max(13, R.s / 40);
+  for (const v of [0, 50, 100]) {
+    text(String(v), sx(R, v), R.y + R.s + fs + 6, { size: fs, color: C.faint, align: 'center' });
+    text(String(v), R.x - 8, sy(R, v) + fs / 3, { size: fs, color: C.faint, align: 'right' });
+  }
+  text('x', R.x + R.s + 10, R.y + R.s + fs / 3, { size: fs + 2, color: C.sub, mono: true });
+  text('y', R.x - 8, R.y - fs - 8, { size: fs + 2, color: C.sub, mono: true, align: 'right' });
+  ctx.restore();
+}
+// colFn(i) → [r,g,b,alpha,半径倍率] / null
+function drawPoints(R, colFn) {
+  const r0 = Math.max(1.3, R.s / 330);
+  for (let i = 0; i < NP; i++) {
+    const c = colFn(i);
+    if (!c || c[3] <= 0.01) continue;
+    ctx.fillStyle = rgba(c, c[3]);
+    ctx.beginPath();
+    ctx.arc(sx(R, PTS[i].x), sy(R, PTS[i].y), r0 * (c[4] || 1), 0, TAU);
+    ctx.fill();
+  }
+}
+function drawQueryRect(R, u, alpha = 1) {
+  if (u <= 0 || alpha <= 0) return;
+  const x0 = sx(R, Q.minX), y0 = sy(R, Q.maxY), w = sx(R, Q.maxX) - x0, h = sy(R, Q.minY) - y0;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.fillStyle = rgba(C.yellow, 0.04 * u);
+  ctx.fillRect(x0, y0, w, h);
+  // 外周をなぞるように描いて「矩形を指定した」動きを見せる
+  const per = 2 * (w + h), len = per * u;
+  ctx.strokeStyle = rgba(C.yellow); ctx.lineWidth = Math.max(2, R.s / 280);
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  const pts = [[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h], [x0, y0]];
+  let acc = 0;
+  ctx.moveTo(x0, y0);
+  for (let i = 1; i < pts.length && acc < len; i++) {
+    const [ax, ay] = pts[i - 1], [bx, by] = pts[i];
+    const seg = Math.hypot(bx - ax, by - ay), f = Math.min(1, (len - acc) / seg);
+    ctx.lineTo(lerp(ax, bx, f), lerp(ay, by, f));
+    acc += seg;
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+function strokeMbr(R, m, col, a, lw, dash) {
+  const x0 = sx(R, m.minX), y0 = sy(R, m.maxY);
+  // 点1個しかない葉でも枠が見えるよう最小サイズを確保
+  const w = Math.max(3, sx(R, m.maxX) - x0), h = Math.max(3, sy(R, m.minY) - y0);
+  ctx.strokeStyle = rgba(col, a); ctx.lineWidth = lw;
+  ctx.setLineDash(dash || []);
+  ctx.strokeRect(x0, y0, w, h);
+  ctx.setLineDash([]);
+  return [x0, y0, w, h];
+}
+function legend(items, x, y, o = {}) {
+  let cx = x;
+  const size = o.size || 22;
+  ctx.save();
+  ctx.globalAlpha *= o.alpha ?? 1;
+  ctx.font = `${size}px ${SANS}`;
+  const total = items.reduce((s, [, label]) => s + 26 + ctx.measureText(label).width + 30, 0) - 30;
+  if (o.align === 'center') cx = x - total / 2;
+  if (o.align === 'right') cx = x - total;
+  for (const [col, label] of items) {
+    ctx.fillStyle = rgba(col);
+    ctx.beginPath(); ctx.arc(cx + 8, y - size / 3, 8, 0, TAU); ctx.fill();
+    ctx.fillStyle = C.sub; ctx.textBaseline = 'alphabetic';
+    ctx.fillText(label, cx + 26, y);
+    cx += 26 + ctx.measureText(label).width + 30;
+  }
+  ctx.restore();
+}
+
+// ---------- B-tree の帯（インデックス順） ----------
+const SX = 130, SW = 1660, SY = 646, SH = 58, BW = SW / NP;
+const ZY = 806, ZH = 72, ZW = SW / NSCAN;
+function drawStripFrame(alpha) {
+  if (alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.fillStyle = '#0d131e';
+  ctx.fillRect(SX - 6, SY - 6, SW + 12, SH + 12);
+  ctx.strokeStyle = C.axis; ctx.lineWidth = 1;
+  ctx.strokeRect(SX - 6, SY - 6, SW + 12, SH + 12);
+  text('B-tree インデックス (x, y) の並び順（葉レベル）', SX - 6, SY - 20, { size: 24, weight: 600, color: C.sub });
+  text('先頭', SX - 6, SY + SH + 30, { size: 18, color: C.faint });
+  text(`末尾 (${fmt(NP)} 件)`, SX + SW + 6, SY + SH + 30, { size: 18, color: C.faint, align: 'right' });
+  ctx.restore();
+}
+function drawStripBars(colByRank, alpha = 1) {
+  if (alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  for (let r = 0; r < NP; r++) {
+    const c = colByRank(r);
+    if (!c || c[3] <= 0.01) continue;
+    ctx.fillStyle = rgba(c, c[3]);
+    ctx.fillRect(SX + r * BW, SY, Math.max(BW, 1.1), SH);
+  }
+  ctx.restore();
+}
+
+// ========================================================================
+// シーン 1：タイトル
+// ========================================================================
+const LEAF_PHASE = RT.byDepth[RT.height].map((n, j) => SpatialModel.mulberry32(n.id * 7919 + 13)());
+function sTitle(S) {
+  // 背景は実データの点と R-tree の葉 MBR。タイトルから本題の素材を匂わせる。
+  const R = { x: 0, y: (H - W) / 2, s: W };
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  drawPoints(R, () => [...C.point, 0.5, 1.4]);
+  const leaves = RT.byDepth[RT.height];
+  leaves.forEach((n, j) => {
+    const ph = ((S.lt / 1000 + LEAF_PHASE[j] * 40) % 14) / 3.2;
+    if (ph >= 1) return;
+    strokeMbr(R, n.mbr, C.cyan, Math.sin(Math.PI * ph) * 0.9, 1.5);
+  });
+  ctx.restore();
+  // 文字の可読性を確保するため中央にだけ暗い帯を敷く
+  const g = ctx.createLinearGradient(0, 330, 0, 760);
+  g.addColorStop(0, 'rgba(11,15,23,0)'); g.addColorStop(0.25, 'rgba(11,15,23,0.85)');
+  g.addColorStop(0.75, 'rgba(11,15,23,0.85)'); g.addColorStop(1, 'rgba(11,15,23,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 330, W, 430);
+  const a = easeOut(prog(S.t, 100, 900));
+  text('B-treeとR-treeを可視化してみた', W / 2, 520 - 12 * (1 - a), { size: 88, weight: 800, align: 'center', alpha: a });
+  text('なぜXYの複合インデックスでは足りないのか？', W / 2, 610, { size: 40, align: 'center', color: C.sub, alpha: easeOut(prog(S.t, 600, 900)) });
+  ctx.fillStyle = rgba(C.yellow, easeOut(prog(S.t, 900, 700)));
+  ctx.fillRect(W / 2 - 60, 652, 120 * easeOut(prog(S.t, 900, 700)), 4);
+}
+
+// ========================================================================
+// シーン 2：XY 座標を DB に格納
+// ========================================================================
+const SQL_CREATE = [
+  'CREATE TABLE points (',
+  '    id INTEGER,',
+  '    x  DOUBLE PRECISION,',
+  '    y  DOUBLE PRECISION',
+  ');',
+  '',
+  'CREATE INDEX idx_xy ON points(x, y);',
+];
+const SQL_SELECT = ['SELECT *', 'FROM points', 'WHERE x BETWEEN 40 AND 60', '  AND y BETWEEN 40 AND 60;'];
+function s2final(i) { return IN_Q[i] ? C.green : C.point; }
+function s2col(S, i) {
+  const ap = S.k > 0 ? 1 : easeOut(prog(S.t, 300 + (i / NP) * 1800, 350));
+  const g = P(S, 2, 900, 500);
+  const c = IN_Q[i] ? mixc(C.point, C.green, g) : C.point;
+  return [...c, ap * (IN_Q[i] ? 1 : 1 - 0.35 * g), IN_Q[i] ? 1 + 0.3 * g : 1];
+}
+function s2(S) {
+  header('XY座標をデータベースに格納する', P(S, 0, 0, 400));
+  const R = L_FULL;
+  drawPlane(R, P(S, 0, 0, 400));
+  drawPoints(R, (i) => s2col(S, i));
+  const n = S.k > 0 ? NP : Math.round(NP * clamp((S.t - 300) / 1800));
+  text(`${fmt(n)} 件`, R.x + R.s, R.y - 14, { size: 26, weight: 600, align: 'right', color: C.sub, alpha: P(S, 0, 0, 400) });
+
+  const a1 = vis(S, 1, Infinity, 0, 500);
+  if (a1 > 0) {
+    drawCode(SQL_CREATE, 1080 + 30 * (1 - a1), 150, { alpha: a1, w: 720, hl: { 6: [C.yellow, P(S, 1, 500, 600)] } });
+    text('x と y の複合インデックス', 1100, 520, { size: 26, color: rgba(C.yellow), alpha: P(S, 1, 800, 500) });
+  }
+  const a2 = vis(S, 2, Infinity, 0, 500);
+  if (a2 > 0) drawCode(SQL_SELECT, 1080 + 30 * (1 - a2), 580, { alpha: a2, w: 720 });
+  drawQueryRect(R, P(S, 2, 300, 800));
+  const g = P(S, 2, 900, 500);
+  if (g > 0) {
+    text(`矩形内：${M.truth.length} 件`, sx(R, 60) + 12, sy(R, 60) - 10, { size: 26, weight: 700, color: rgba(C.green), alpha: g });
+    caption('インデックスがあるから、', 880, P(S, 2, 1500, 600), { x: 1100, align: 'left', size: 34 });
+    caption('この矩形も速く探せそう…？', 935, P(S, 2, 1500, 600), { x: 1100, align: 'left', size: 34 });
+  }
+}
+
+// ========================================================================
+// シーン 3：B-tree の世界（2次元 → 1次元）
+// ========================================================================
+// 抜粋表示用：x が 40 付近で、同じ x（タイ）を含む 10 件の連続区間を実データから探す
+const EX_LEN = 10;
+let EX_START = LO;
+for (let r = LO; r < LO + 200; r++) {
+  const xs = ORDER.slice(r, r + EX_LEN).map((i) => PTS[i].x);
+  if (xs.some((x, j) => j > 0 && x === xs[j - 1])) { EX_START = r; break; }
+}
+const FLY0 = 200, FLYD = 2400, FLYDUR = 900;
+function flyU(S, r) { return P(S, 1, FLY0 + (r / NP) * FLYD, FLYDUR); }
+function s3base(S, i) { return mixc(s2final(i), HUE[i], P(S, 0, 300, 800)); }
+function s3(S) {
+  header('B-treeの世界：2次元の点を1列に並べる');
+  const R = lerpRect(L_FULL, L_TOP, P(S, 0, 0, 900));
+  drawPlane(R);
+  drawStripFrame(P(S, 0, 600, 500));
+  const sweep = S.k === 3;
+  const PERIOD = 9000;
+  const cr = sweep ? Math.floor(((S.lt % PERIOD) / PERIOD) * NP) : -1;
+  const TRAIL = 140;
+
+  // 平面の点。走査デモ中は軌跡を見せるため少し暗くする
+  const dimA = sweep ? 1 - 0.5 * easeIO(prog(S.t, 0, 400)) : 1;
+  drawPoints(R, (i) => [...s3base(S, i), dimA]);
+  // 帯（着地済みのものだけ棒として描く）
+  drawStripBars((r) => (flyU(S, r) >= 1 ? [...HUE[ORDER[r]], 1] : null));
+  // 移動中の点：平面から帯の自分の位置へ落ちていく
+  if (S.k === 1) {
+    for (let r = 0; r < NP; r++) {
+      const u = flyU(S, r);
+      if (u <= 0 || u >= 1) continue;
+      const i = ORDER[r];
+      const x0 = sx(R, PTS[i].x), y0 = sy(R, PTS[i].y), x1 = SX + (r + 0.5) * BW, y1 = SY + SH / 2;
+      const cx = x0, cy = y1 - 40;
+      const bx = (1 - u) * (1 - u) * x0 + 2 * u * (1 - u) * cx + u * u * x1;
+      const by = (1 - u) * (1 - u) * y0 + 2 * u * (1 - u) * cy + u * u * y1;
+      ctx.fillStyle = rgba(HUE[i]);
+      ctx.beginPath(); ctx.arc(bx, by, 2.4, 0, TAU); ctx.fill();
+    }
+  }
+
+  // 右パネル
+  const PX = 640;
+  caption('この 2,000 点を (x, y) インデックスに入れると…', 200, vis(S, 0, 0, 600), { x: PX, align: 'left', size: 34 });
+  const ra = vis(S, 1, Infinity, FLY0 + FLYD * 0.6, 600);
+  if (ra > 0) {
+    text('(x, y) の辞書順に1列に並ぶ', PX, 180, { size: 34, weight: 700, alpha: ra });
+    text('① x の昇順', PX + 10, 240, { size: 30, alpha: ra });
+    text('② x が同じなら y の昇順', PX + 10, 288, { size: 30, alpha: ra });
+  }
+  // 色の凡例：色 = x の値
+  const la = P(S, 0, 600, 500);
+  if (la > 0) {
+    ctx.save(); ctx.globalAlpha = la;
+    const gx = PX, gy = 470, gw = 420;
+    for (let v = 0; v <= 100; v++) { ctx.fillStyle = rgba(hueOf(v)); ctx.fillRect(gx + (v / 100) * gw, gy, gw / 100 + 1, 14); }
+    text('色 = x の値', gx, gy - 14, { size: 22, color: C.sub });
+    text('0', gx, gy + 38, { size: 18, color: C.faint });
+    text('100', gx + gw, gy + 38, { size: 18, color: C.faint, align: 'right' });
+    ctx.restore();
+  }
+
+  // 抜粋の表と、平面上での並び順の軌跡
+  const ea = vis(S, 2, 2, 0, 400);
+  if (ea > 0) {
+    ctx.save(); ctx.globalAlpha = ea;
+    const TX = 1200, TY = 150, RH = 37;
+    text('インデックスの中身（抜粋）', TX, TY - 10, { size: 22, color: C.sub });
+    const pts = [];
+    for (let j = 0; j < EX_LEN; j++) {
+      const r = EX_START + j, i = ORDER[r], p = PTS[i];
+      const u = P(S, 2, 300 + j * 300, 250);
+      pts.push([sx(R, p.x), sy(R, p.y), u]);
+      if (u <= 0) continue;
+      const y = TY + 26 + j * RH;
+      const tie = (j > 0 && PTS[ORDER[r - 1]].x === p.x) || (j < EX_LEN - 1 && PTS[ORDER[r + 1]].x === p.x);
+      ctx.globalAlpha = ea * u;
+      ctx.fillStyle = j % 2 ? '#111826' : '#0f1520';
+      ctx.fillRect(TX, y - 4, 520, RH);
+      text(`${j + 1}`, TX + 30, y + 23, { size: 22, color: C.faint, align: 'right', mono: true });
+      richText([['( ', C.sub], [p.x.toFixed(1).padStart(5), tie ? rgba(C.yellow) : C.text], [' , ', C.sub], [p.y.toFixed(1).padStart(5), C.text], [' )', C.sub]],
+        TX + 60, y + 23, { size: 24 });
+      ctx.fillStyle = rgba(HUE[i]);
+      ctx.beginPath(); ctx.arc(TX + 380, y + 15, 7, 0, TAU); ctx.fill();
+      if (tie && !(j > 0 && PTS[ORDER[r - 1]].x === p.x)) text('← x が同じ → y の昇順', TX + 400, y + 22, { size: 18, color: rgba(C.yellow) });
+    }
+    ctx.globalAlpha = ea;
+    // 平面上では、インデックスの隣同士が上下に大きく跳ぶことを線で見せる
+    ctx.strokeStyle = rgba(C.white, 0.85); ctx.lineWidth = 2;
+    for (let j = 1; j < pts.length; j++) {
+      const u = pts[j][2];
+      if (u <= 0) continue;
+      ctx.beginPath();
+      ctx.moveTo(pts[j - 1][0], pts[j - 1][1]);
+      ctx.lineTo(lerp(pts[j - 1][0], pts[j][0], u), lerp(pts[j - 1][1], pts[j][1], u));
+      ctx.stroke();
+    }
+    pts.forEach(([x, y, u], j) => {
+      if (u <= 0) return;
+      ctx.strokeStyle = rgba(C.white, u); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 6, 0, TAU); ctx.stroke();
+      text(String(j + 1), x + 10, y + 6, { size: 16, weight: 700, alpha: u, color: C.white });
+    });
+    // 帯の上の位置
+    const mx = SX + (EX_START + EX_LEN / 2) * BW;
+    ctx.fillStyle = rgba(C.yellow);
+    ctx.beginPath(); ctx.moveTo(mx, SY - 2); ctx.lineTo(mx - 8, SY - 14); ctx.lineTo(mx + 8, SY - 14); ctx.fill();
+    ctx.strokeStyle = rgba(C.yellow, 0.5); ctx.setLineDash([4, 5]);
+    ctx.beginPath(); ctx.moveTo(mx, SY - 16); ctx.lineTo(1190, 545); ctx.stroke(); ctx.setLineDash([]);
+    ctx.restore();
+    caption('インデックス上では隣同士でも、平面上では上下に遠く離れている', 590, P(S, 2, 3400, 600), { x: 1200, align: 'left', size: 22, weight: 400, color: C.sub });
+  }
+
+  // インデックスを先頭から辿るデモ（ループ）
+  if (sweep) {
+    const a = easeIO(prog(S.t, 200, 500));
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.lineWidth = 2;
+    for (let r = Math.max(1, cr - TRAIL); r <= cr; r++) {
+      const p0 = PTS[ORDER[r - 1]], p1 = PTS[ORDER[r]];
+      ctx.strokeStyle = rgba(C.white, ((r - (cr - TRAIL)) / TRAIL) * 0.9);
+      ctx.beginPath(); ctx.moveTo(sx(R, p0.x), sy(R, p0.y)); ctx.lineTo(sx(R, p1.x), sy(R, p1.y)); ctx.stroke();
+    }
+    const p = PTS[ORDER[cr]], px = sx(R, p.x), py = sy(R, p.y), qx = SX + (cr + 0.5) * BW;
+    ctx.fillStyle = rgba(C.white);
+    ctx.beginPath(); ctx.arc(px, py, 6, 0, TAU); ctx.fill();
+    ctx.fillStyle = rgba(C.white, 0.18);
+    const tr0 = Math.max(0, cr - TRAIL);
+    ctx.fillRect(SX + tr0 * BW, SY - 4, (cr - tr0) * BW, SH + 8);
+    ctx.fillStyle = rgba(C.white);
+    ctx.fillRect(qx - 1.5, SY - 10, 3, SH + 20);
+    ctx.strokeStyle = rgba(C.white, 0.4); ctx.setLineDash([5, 6]); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(qx, SY - 10); ctx.lineTo(px, py); ctx.stroke(); ctx.setLineDash([]);
+    ctx.restore();
+    const ca = vis(S, 3, 3, 400, 600);
+    text('インデックスを先頭から順にたどると…', 1200, 190, { size: 28, color: C.sub, alpha: ca });
+    text('x が少し進むたびに', 1200, 260, { size: 34, weight: 600, alpha: ca });
+    text('y は下から上まで大きく往復する', 1200, 310, { size: 34, weight: 600, alpha: ca });
+    text('B-tree の「近さ」は x の近さ', 1200, 400, { size: 34, weight: 700, color: rgba(C.yellow), alpha: vis(S, 3, 3, 1400, 600) });
+  }
+}
+
+// ========================================================================
+// シーン 4：B-tree で矩形検索
+// ========================================================================
+const SWEEP0 = 400, SWEEPD = 3600;
+const BT_RES = new Set(BR.results);
+function s4col(S, i) {
+  const neutral = mixc(HUE[i], C.point, P(S, 0, 0, 600));
+  if (IN_X[i]) {
+    let c = mixc(neutral, C.blue, P(S, 1, 300, 500));
+    const j = RANK[i] - LO;
+    const cls = P(S, 2, SWEEP0 + (j / NSCAN) * SWEEPD, 150);
+    c = mixc(c, IN_Q[i] ? C.green : C.dimX, cls);
+    return [...c, 1, IN_Q[i] ? 1 + 0.3 * cls : 1];
+  }
+  return [...mixc(neutral, C.dim, P(S, 3, 0, 600)), 1];
+}
+function s4(S) {
+  header('B-treeで矩形検索する');
+  const R = L_TOP;
+  drawPlane(R);
+  // X 条件だけで決まる縦長の帯。検索矩形から上下に伸ばして「x だけだとこうなる」を見せる
+  const bp = P(S, 1, 0, 700);
+  if (bp > 0) {
+    const y0 = sy(R, lerp(Q.maxY, 100, bp)), y1 = sy(R, lerp(Q.minY, 0, bp));
+    ctx.fillStyle = rgba(C.blue, 0.13);
+    ctx.fillRect(sx(R, Q.minX), y0, sx(R, Q.maxX) - sx(R, Q.minX), y1 - y0);
+    ctx.strokeStyle = rgba(C.blue, 0.7); ctx.setLineDash([6, 5]); ctx.lineWidth = 1.5;
+    ctx.strokeRect(sx(R, Q.minX), y0, sx(R, Q.maxX) - sx(R, Q.minX), y1 - y0); ctx.setLineDash([]);
+  }
+  drawPoints(R, (i) => s4col(S, i));
+  drawQueryRect(R, P(S, 0, 300, 800));
+  drawStripFrame(1);
+  drawStripBars((r) => s4col(S, ORDER[r]));
+
+  // X 範囲のマーカー（二分探索で開始位置へ）
+  const ma = P(S, 1, 600, 500);
+  if (ma > 0) {
+    for (const [r, lab] of [[LO, 'x = 40'], [HI, 'x = 60']]) {
+      const mx = SX + r * BW;
+      ctx.fillStyle = rgba(C.blue, ma);
+      ctx.fillRect(mx - 1, SY - 12, 2, SH + 18);
+      text(lab, mx, SY - 18, { size: 18, weight: 700, color: rgba(C.blue), align: 'center', alpha: ma });
+    }
+    text('二分探索で開始位置へ → 連続区間を走査', SX + HI * BW + 14, SY + SH + 30, { size: 18, color: rgba(C.blue), alpha: ma });
+  }
+
+  // 拡大パネル：X 範囲の連続区間だけを横いっぱいに引き伸ばす
+  const za = P(S, 1, 900, 600);
+  if (za > 0) {
+    ctx.save(); ctx.globalAlpha = za;
+    ctx.fillStyle = rgba(C.blue, 0.07);
+    ctx.beginPath();
+    ctx.moveTo(SX + LO * BW, SY + SH + 6); ctx.lineTo(SX + HI * BW, SY + SH + 6);
+    ctx.lineTo(SX + SW, ZY - 6); ctx.lineTo(SX, ZY - 6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#0d131e'; ctx.fillRect(SX - 6, ZY - 6, SW + 12, ZH + 12);
+    ctx.strokeStyle = rgba(C.blue, 0.5); ctx.lineWidth = 1; ctx.strokeRect(SX - 6, ZY - 6, SW + 12, ZH + 12);
+    for (let j = 0; j < NSCAN; j++) {
+      const c = s4col(S, ORDER[LO + j]);
+      ctx.fillStyle = rgba(c);
+      ctx.fillRect(SX + j * ZW + 0.5, ZY, Math.max(1, ZW - 1), ZH);
+    }
+    ctx.restore();
+    richText([['拡大：', C.sub], [`x が 40〜60 の区間 ＝ インデックス上で連続した ${fmt(NSCAN)} 件`, rgba(C.blue)]], SX - 6, ZY + ZH + 40, { size: 24, weight: 600, alpha: za * (1 - P(S, 2, 0, 300)) });
+  }
+
+  // Y 条件の評価：区間を先頭から走査しながら1件ずつ判定する
+  if (S.k === 2) {
+    const u = (S.t - SWEEP0) / SWEEPD;
+    if (u >= 0 && u < 1) {
+      const j = Math.floor(u * NSCAN), i = ORDER[LO + j];
+      const zx = SX + (j + 0.5) * ZW, qx = SX + (LO + j + 0.5) * BW, px = sx(R, PTS[i].x), py = sy(R, PTS[i].y);
+      ctx.fillStyle = rgba(C.white);
+      ctx.fillRect(zx - 1.5, ZY - 10, 3, ZH + 20);
+      ctx.fillRect(qx - 1, SY - 6, 2, SH + 12);
+      ctx.strokeStyle = rgba(C.white, 0.45); ctx.setLineDash([5, 6]); ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(qx, SY - 6); ctx.lineTo(px, py); ctx.stroke(); ctx.setLineDash([]);
+      ctx.strokeStyle = rgba(C.white); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(px, py, 7, 0, TAU); ctx.stroke();
+    }
+  }
+  const ya = vis(S, 2, Infinity, SWEEP0 + SWEEPD * 0.5, 600);
+  if (ya > 0) {
+    richText([['y も 40〜60 に一致する項目（', C.text], ['緑', rgba(C.green)], ['）は、連続区間の中に', C.text], ['飛び飛び', rgba(C.yellow)], ['に散らばっている', C.text]],
+      SX - 6, ZY + ZH + 40, { size: 26, weight: 600, alpha: ya });
+  }
+  legend([[C.blue, 'x が一致（走査対象）'], [C.green, 'x も y も一致'], [C.dimX, 'x のみ一致']], SX + SW, ZY - 18, { size: 18, alpha: za, align: 'right' });
+  // 平面の凡例は帯のラベルと重ならない平面の右側に置く
+  // SQL
+  const qa = P(S, 0, 0, 500);
+  drawCode(SQL_SELECT, 640, 118, { alpha: qa, size: 24, w: 470, hl: { 2: [C.blue, P(S, 1, 0, 500)], 3: [C.green, P(S, 2, 0, 500)] } });
+
+  // 件数
+  const ca = P(S, 3, 0, 600);
+  if (ca > 0) {
+    const rows = [['全データ', NP, C.point], ['X 範囲の走査', NSCAN, C.blue], ['最終検索結果', BR.results.length, C.green]];
+    rows.forEach(([lab, v, col], j) => {
+      const a = P(S, 3, j * 350, 500), y = 160 + j * 110;
+      text(lab, 1200, y, { size: 26, color: C.sub, alpha: a });
+      text(`${fmt(v)} 件`, 1790, y, { size: 44, weight: 800, align: 'right', color: rgba(col), alpha: a });
+      ctx.fillStyle = rgba(col, 0.85 * a);
+      ctx.fillRect(1200, y + 20, (v / NP) * 590 * a, 10);
+    });
+    text('※ y はインデックス上で評価できるが、走査する範囲は x の条件で決まる', 640, 330, { size: 18, color: C.faint, alpha: P(S, 3, 1200, 600) });
+    caption('(x, y) の複合インデックスなのに、実質は「x の範囲」を広く走査している', 990, P(S, 3, 1300, 600), { size: 32 });
+  }
+}
+
+// ========================================================================
+// R-tree の探索再生（シーン 6・7・8 共通）
+// ========================================================================
+const HT = RT.height; // 葉の深さ
+const EVENTS = RR.events.filter((e) => e.depth > 0);
+const HIT = new Map(RR.events.map((e) => [e.node.id, e.hit]));
+const PRUNED_BY = new Array(NP).fill(null);
+for (const e of RR.events) if (!e.hit) for (const pi of e.node.allPoints) PRUNED_BY[pi] = e.node;
+const EXAMINED = new Set(RR.examined);
+const RT_RES = new Set(RR.results);
+// タイミング表：どのステップの何 ms 後にどのノードを判定するか。シーンごとにテンポだけ変える。
+function makeTiming(stepOf, delayOf, exStep, exDelay) {
+  const node = new Map(), ex = new Map();
+  for (let d = 1; d <= HT; d++) {
+    const evs = EVENTS.filter((e) => e.depth === d);
+    evs.forEach((e, idx) => node.set(e.node.id, { step: stepOf(d), delay: delayOf(d, idx, evs.length) }));
+  }
+  RR.examined.forEach((pi, idx) => ex.set(pi, { step: exStep, delay: exDelay(idx, RR.examined.length) }));
+  return { node, ex };
+}
+const TM6 = makeTiming((d) => d - 1, (d, i, n) => 500 + (i / n) * (d === 1 ? 1200 : 1800), HT, (i, n) => 300 + (i / n) * 1800);
+const TM7 = makeTiming(() => 1, (d, i, n) => 200 + (d - 1) * 750 + (i / n) * 550, 1, (i, n) => 200 + HT * 750 + (i / n) * 700);
+const judgeP = (S, tm, n) => { const o = tm.node.get(n.id); return P(S, o.step, o.delay, 350); };
+const appearP = (S, tm, n) => { const o = tm.node.get(n.id); return P(S, o.step, o.delay - 350, 300); };
+
+function rcol(S, tm, i, keepBlue) {
+  const pn = PRUNED_BY[i];
+  if (pn) return [...mixc(C.point, C.dim, judgeP(S, tm, pn)), 1];
+  const o = tm.ex.get(i);
+  const e = P(S, o.step, o.delay, 200), f = P(S, o.step, o.delay + 250, 300);
+  let c = mixc(C.point, C.blue, e);
+  c = mixc(c, IN_Q[i] ? C.green : keepBlue ? [60, 120, 200] : C.dimX, f);
+  return [...c, 1, IN_Q[i] ? 1 + 0.3 * f : 1 + 0.4 * (e - f)];
+}
+// MBR の描画。detail=true で「−N 点」の表示や赤いフラッシュを出す
+function drawRtreeSearch(R, S, tm, o = {}) {
+  for (let d = 1; d <= HT; d++) {
+    for (const e of EVENTS) {
+      if (e.depth !== d) continue;
+      const n = e.node, ap = appearP(S, tm, n);
+      if (ap <= 0) continue;
+      const j = judgeP(S, tm, n);
+      const deeperShown = d < HT && S.k > tm.node.get(n.id).step;
+      const lw = [0, 4, 2.5, 1.5, 1.2][d] || 1.2;
+      if (j <= 0) { strokeMbr(R, n.mbr, C.white, 0.8 * ap, lw); continue; }
+      if (e.hit) {
+        const a = deeperShown ? (o.final ? 0.25 : 0.4) : 1;
+        strokeMbr(R, n.mbr, mixc(C.white, LEVEL_COL[Math.min(d, 3)], j), a, lw);
+      } else {
+        const flash = Math.sin(Math.PI * j);
+        const [x0, y0, w, h] = strokeMbr(R, n.mbr, mixc(C.red, [90, 100, 118], j), 0.9 - 0.45 * j, Math.max(1, lw - 1), j >= 1 ? [5, 5] : null);
+        if (flash > 0.01) { ctx.fillStyle = rgba(C.red, 0.2 * flash); ctx.fillRect(x0, y0, w, h); }
+        if (o.detail && d < HT) {
+          const la = j * (S.k === tm.node.get(n.id).step ? 1 : 0.0);
+          if (la > 0) {
+            text(`−${fmt(n.allPoints.length)} 点`, x0 + w / 2, y0 + h / 2 + 10 - 16 * j, {
+              size: d === 1 ? 40 : 24, weight: 800, align: 'center', color: rgba(C.red), alpha: la,
+            });
+          }
+        }
+      }
+    }
+  }
+}
+
+// ========================================================================
+// シーン 5：R-tree の構造
+// ========================================================================
+function s5(S) {
+  header('R-treeの登場：空間的なまとまりで整理する');
+  const lp = P(S, 0, 0, 900);
+  const R = lerpRect(L_TOP, L_FULL, lp);
+  // B-tree の帯は消えていく
+  const fa = 1 - P(S, 0, 0, 450);
+  if (fa > 0) {
+    ctx.save(); ctx.globalAlpha = fa;
+    drawStripFrame(1);
+    const F = { k: 99, t: Infinity };
+    drawStripBars((r) => s4col(F, ORDER[r]));
+    ctx.restore();
+  }
+  drawPlane(R);
+  const F4 = { k: 99, t: Infinity };
+  const gp = P(S, 0, 200, 700);
+  drawPoints(R, (i) => [...mixc(s4col(F4, i), C.point, gp), 1]);
+
+  const leaves = RT.byDepth[HT];
+  // 深さ HT（葉）→ 1（上位）の順に下から積み上げて出現させる
+  for (let d = HT; d >= 1; d--) {
+    const step = HT - d + 1;
+    const nodes = RT.byDepth[d];
+    nodes.forEach((n, idx) => {
+      const ap = P(S, step, 200 + (idx / nodes.length) * 1400, 350);
+      if (ap <= 0) return;
+      // 上の階層が出てきたら下の階層は控えめにして、階層の違いを読みやすくする
+      const upper = S.k > step ? 0.45 : 1;
+      const col = LEVEL_COL[Math.min(d, 3)], lw = [0, 4, 2.5, 1.3][d] || 1.3;
+      const [x0, y0, w, h] = strokeMbr(R, n.mbr, col, ap * upper, lw);
+      if (S.k === step) { ctx.fillStyle = rgba(col, 0.06 * ap); ctx.fillRect(x0, y0, w, h); }
+    });
+  }
+
+  // 右パネル：階層の模式図
+  const PX = 1090;
+  text('近くの点を矩形でまとめ、', PX, 190, { size: 32, weight: 600, alpha: P(S, 0, 600, 600) });
+  text('それをさらに大きな矩形でまとめる', PX, 238, { size: 32, weight: 600, alpha: P(S, 0, 600, 600) });
+  const rows = [];
+  for (let d = 0; d <= HT; d++) rows.push({ d, n: RT.byDepth[d].length, label: d === 0 ? 'ルート' : d === HT ? '葉ノード' : d === 1 ? '上位ノード' : '中間ノード', step: d === 0 ? HT : HT - d + 1 });
+  rows.push({ d: HT + 1, n: NP, label: '点', step: 0 });
+  rows.forEach((row, ri) => {
+    const a = row.step === 0 ? P(S, 0, 600, 600) : P(S, row.step, row.d === 0 ? 1600 : 0, 500);
+    if (a <= 0) return;
+    const y = 340 + ri * 82;
+    const col = row.d > HT ? C.point : LEVEL_COL[Math.min(row.d, 3)];
+    text(row.label, PX, y + 8, { size: 24, color: C.sub, alpha: a });
+    text(fmt(row.n), PX + 250, y + 8, { size: 28, weight: 700, align: 'right', alpha: a, color: rgba(col) });
+    const bx = PX + 280, bw = 500, k = Math.min(row.n, 250), cell = bw / k;
+    ctx.save(); ctx.globalAlpha = a;
+    for (let q = 0; q < k; q++) {
+      if (row.d > HT) { ctx.fillStyle = rgba(col, 0.7); ctx.fillRect(bx + q * cell, y - 6, Math.max(1, cell - 0.5), 12); }
+      else { ctx.strokeStyle = rgba(col, 0.9); ctx.lineWidth = row.d === 0 ? 3 : 1; ctx.strokeRect(bx + q * cell + 1, y - 12, Math.max(1, cell - 3), 24); }
+    }
+    ctx.restore();
+    if (ri < rows.length - 1) text('▼', PX + 230, y + 50, { size: 14, color: C.faint, alpha: a });
+  });
+  const na = P(S, HT, 2000, 600);
+  text('MBR（最小外接矩形）＝ 実際に構築した R-tree のノード', PX, 790, { size: 20, color: C.faint, alpha: na });
+  text('（STR バルクロード、1ノード最大 9 件）　矩形同士が重なることもある', PX, 822, { size: 20, color: C.faint, alpha: na });
+  richText([['B-tree は「', C.sub], ['値の順序', rgba(C.blue)], ['」、R-tree は「', C.sub], ['空間のまとまり', rgba(C.cyan)], ['」で整理', C.sub]], PX, 920, { size: 27, weight: 600, alpha: P(S, HT, 2400, 600) });
+}
+
+// ========================================================================
+// シーン 6：R-tree で矩形検索
+// ========================================================================
+function s6(S) {
+  header('R-treeで矩形検索する');
+  const R = L_FULL;
+  drawPlane(R);
+  // 構造シーンの全階層表示から、探索用の表示へ切り替える
+  const fade = 1 - P(S, 0, 0, 400);
+  if (fade > 0) for (let d = 1; d <= HT; d++) for (const n of RT.byDepth[d]) strokeMbr(R, n.mbr, LEVEL_COL[Math.min(d, 3)], 0.45 * fade, 1);
+  const fin = P(S, HT + 1, 0, 600);
+  drawPoints(R, (i) => {
+    const c = rcol(S, TM6, i, false);
+    if (fin > 0 && !IN_Q[i]) c[3] = 1 - 0.4 * fin;
+    return c;
+  });
+  ctx.save(); ctx.globalAlpha = 1 - 0.6 * fin;
+  drawRtreeSearch(R, S, TM6, { detail: true });
+  ctx.restore();
+  drawQueryRect(R, P(S, 0, 100, 700));
+
+  // 右パネル：手順と件数
+  const PX = 1090;
+  const stepsTxt = [];
+  for (let d = 1; d <= HT; d++) stepsTxt.push(`${d === 1 ? '上位' : d === HT ? '葉' : '中間'}ノードの MBR と検索矩形の交差を判定`);
+  stepsTxt.push('残った葉ノードの点だけを調べる');
+  stepsTxt.push('結果');
+  stepsTxt.forEach((s, j) => {
+    const a = S.k >= j ? 1 : 0.3, cur = S.k === j;
+    text(`${'①②③④⑤⑥⑦'[j]} ${s}`, PX, 170 + j * 48, { size: 24, weight: cur ? 700 : 400, color: cur ? C.text : C.sub, alpha: a });
+  });
+  legend([[C.cyan, '交差 → 子をたどる'], [C.red, '交差しない → 配下ごと除外']], PX, 450, { size: 22 });
+
+  // 件数：判定が終わった分だけ数える（再生と完全に連動させるため毎フレーム数え直す）
+  let judged = 1, pruned = 0, prunedPts = 0;
+  for (const e of EVENTS) {
+    if (judgeP(S, TM6, e.node) < 0.5) continue;
+    judged++;
+    if (!e.hit) { pruned++; prunedPts += e.node.allPoints.length; }
+  }
+  const rows = [
+    ['交差判定したノード', `${judged} 個`, C.text],
+    ['除外したノード', `${pruned} 個`, C.red],
+    ['まとめて除外した点', `${fmt(prunedPts)} / ${fmt(NP)} 点`, C.red],
+  ];
+  rows.forEach(([lab, v, col], j) => {
+    const y = 540 + j * 64;
+    text(lab, PX, y, { size: 24, color: C.sub });
+    text(v, 1800, y, { size: 34, weight: 700, align: 'right', color: Array.isArray(col) ? rgba(col) : col });
+  });
+  const ea = P(S, HT, 0, 500);
+  if (ea > 0) {
+    let ex = 0;
+    for (const pi of RR.examined) if (P(S, HT, TM6.ex.get(pi).delay, 200) >= 1) ex++;
+    text('調べた点', PX, 760, { size: 24, color: C.sub, alpha: ea });
+    text(`${fmt(ex)} 点`, 1800, 760, { size: 34, weight: 700, align: 'right', color: rgba(C.blue), alpha: ea });
+  }
+  const ra = P(S, HT + 1, 0, 600);
+  if (ra > 0) {
+    text('検索結果', PX, 824, { size: 24, color: C.sub, alpha: ra });
+    text(`${fmt(RR.results.length)} 件`, 1800, 824, { size: 44, weight: 800, align: 'right', color: rgba(C.green), alpha: ra });
+    text(M.resultsMatch ? '✓ B-tree の検索結果と完全に一致' : '✗ 結果が一致しません', PX, 900, { size: 30, weight: 700, color: rgba(M.resultsMatch ? C.green : C.red), alpha: P(S, HT + 1, 500, 600) });
+  }
+}
+
+// ========================================================================
+// シーン 7：比較
+// ========================================================================
+function btcol7(S, i) {
+  if (!IN_X[i]) return [...mixc(C.point, C.dim, P(S, 1, 200, 600)), 1];
+  const j = RANK[i] - LO;
+  const e = P(S, 1, 200 + (j / NSCAN) * 2400, 200), f = P(S, 1, 450 + (j / NSCAN) * 2400, 300);
+  let c = mixc(C.point, C.blue, e);
+  c = mixc(c, IN_Q[i] ? C.green : [60, 120, 200], f);
+  return [...c, 1, IN_Q[i] ? 1 + 0.3 * f : 1];
+}
+function drawBtreeBand(R, u) {
+  if (u <= 0) return;
+  const y0 = sy(R, 100), y1 = sy(R, 0);
+  ctx.fillStyle = rgba(C.blue, 0.12 * u);
+  ctx.fillRect(sx(R, Q.minX), y0, sx(R, Q.maxX) - sx(R, Q.minX), (y1 - y0) * u);
+  ctx.strokeStyle = rgba(C.blue, 0.7 * u); ctx.setLineDash([6, 5]); ctx.lineWidth = 1.5;
+  ctx.strokeRect(sx(R, Q.minX), y0, sx(R, Q.maxX) - sx(R, Q.minX), (y1 - y0) * u); ctx.setLineDash([]);
+}
+function s7(S) {
+  header('同じデータ、同じ検索条件で比べる', P(S, 0, 0, 400));
+  const a0 = P(S, 0, 0, 500);
+  ctx.save(); ctx.globalAlpha = a0;
+  for (const [R, lab] of [[L_LEFT, 'B-tree (x, y)'], [L_RIGHT, 'R-tree']]) {
+    drawPlane(R);
+    text(lab, R.x + R.s / 2, R.y - 22, { size: 34, weight: 700, align: 'center' });
+  }
+  drawBtreeBand(L_LEFT, P(S, 1, 0, 600));
+  drawPoints(L_LEFT, (i) => btcol7(S, i));
+  drawRtreeSearch(L_RIGHT, S, TM7, { final: true });
+  drawPoints(L_RIGHT, (i) => rcol(S, TM7, i, true));
+  drawQueryRect(L_LEFT, P(S, 0, 200, 700));
+  drawQueryRect(L_RIGHT, P(S, 0, 200, 700));
+  ctx.restore();
+  legend([[C.green, '検索結果'], [[60, 120, 200], '調べたが範囲外'], [C.dim, '調べずに済んだ']], W / 2, 125, { size: 20, align: 'center', alpha: P(S, 1, 0, 500) });
+
+  const ta = P(S, 2, 0, 600);
+  if (ta > 0) {
+    const cxL = L_LEFT.x + L_LEFT.s / 2, cxR = L_RIGHT.x + L_RIGHT.s / 2;
+    const rows = [['検索結果', BR.results.length, RR.results.length, C.green], ['調べた点', NSCAN, RR.examined.length, C.blue]];
+    rows.forEach(([lab, l, r, col], j) => {
+      const y = 860 + j * 74, a = P(S, 2, j * 400, 500);
+      text(lab, W / 2, y, { size: 28, color: C.sub, align: 'center', alpha: a });
+      text(`${fmt(l)} ${j ? '点' : '件'}`, cxL, y + 4, { size: 46, weight: 800, align: 'center', color: rgba(col), alpha: a });
+      text(`${fmt(r)} ${j ? '点' : '件'}`, cxR, y + 4, { size: 46, weight: 800, align: 'center', color: rgba(col), alpha: a });
+    });
+    text('※ インデックス上で調べた点エントリ数の比較。R-tree の MBR 判定・ノード訪問数・I/O・実行時間は含みません', W / 2, 1005, { size: 18, color: C.faint, align: 'center', alpha: P(S, 2, 1000, 600) });
+  }
+}
+
+// ========================================================================
+// シーン 8：まとめ
+// ========================================================================
+function s8(S) {
+  const F = { k: 99, t: Infinity };
+  // 背景：B-tree の縦長の走査範囲と、R-tree の枝刈りの対比
+  ctx.save(); ctx.globalAlpha = 0.28 * easeIO(prog(S.t, 0, 800));
+  const RL = { x: 150, y: 210, s: 660 }, RRr = { x: 1110, y: 210, s: 660 };
+  drawBtreeBand(RL, 1);
+  drawPoints(RL, (i) => btcol7(F, i));
+  drawRtreeSearch(RRr, F, TM7, { final: true });
+  drawPoints(RRr, (i) => rcol(F, TM7, i, true));
+  ctx.restore();
+  const ba = 0.6 * easeIO(prog(S.t, 0, 800));
+  text('B-tree：x の帯を走査', RL.x + RL.s / 2, RL.y + RL.s + 50, { size: 24, color: rgba(C.blue), align: 'center', alpha: ba });
+  text('R-tree：MBR で枝刈り', RRr.x + RRr.s / 2, RRr.y + RRr.s + 50, { size: 24, color: rgba(C.cyan), align: 'center', alpha: ba });
+  const a1 = easeOut(prog(S.t, 300, 800)), a2 = easeOut(prog(S.t, 1100, 800)), a3 = easeOut(prog(S.t, 2000, 800));
+  richText([['B-tree', C.text], ['は「', C.text], ['値の順序', rgba(C.blue)], ['」で探す。', C.text]], W / 2, 450, { size: 72, weight: 800, align: 'center', alpha: a1 });
+  richText([['R-tree', C.text], ['は「', C.text], ['空間的なまとまり', rgba(C.cyan)], ['」で探す。', C.text]], W / 2, 580, { size: 72, weight: 800, align: 'center', alpha: a2 });
+  text('データの性質に合わせて、インデックスの構造も変わる。', W / 2, 700, { size: 34, color: C.sub, align: 'center', alpha: a3 });
+}
+
+// ========================================================================
+// ステップ管理とナビゲーション
+// ========================================================================
+const SCENES = [
+  { name: 'タイトル', n: 1, draw: sTitle },
+  { name: 'XY座標を格納', n: 3, draw: s2 },
+  { name: 'B-treeの並び', n: 4, draw: s3 },
+  { name: 'B-treeで検索', n: 4, draw: s4 },
+  { name: 'R-treeの構造', n: HT + 1, draw: s5 },
+  { name: 'R-treeで検索', n: HT + 2, draw: s6 },
+  { name: '比較', n: 3, draw: s7 },
+  { name: 'まとめ', n: 1, draw: s8 },
+];
+const STEPS = [];
+SCENES.forEach((sc, si) => { for (let k = 0; k < sc.n; k++) STEPS.push({ si, k }); });
+
+let cur = 0, enterAt = performance.now(), animate = true;
+function go(i, anim) {
+  i = clamp(i, 0, STEPS.length - 1);
+  cur = i;
+  enterAt = performance.now();
+  animate = anim;
+  // リロードしても同じステップから再開できるよう URL に残す（リハーサル用）
+  history.replaceState(null, '', '#' + (cur + 1));
+  updateHud();
+}
+const next = () => { if (cur < STEPS.length - 1) go(cur + 1, true); };
+const prev = () => { if (cur > 0) go(cur - 1, false); };
+
+const hudName = document.getElementById('sceneName'), hudDots = document.getElementById('dots'), hudStep = document.getElementById('stepNo');
+hudDots.innerHTML = SCENES.map(() => '<i></i>').join('');
+function updateHud() {
+  const { si, k } = STEPS[cur];
+  hudName.textContent = `${si + 1}. ${SCENES[si].name}`;
+  [...hudDots.children].forEach((el, j) => (el.className = j < si ? 'done' : j === si ? 'cur' : ''));
+  hudStep.textContent = SCENES[si].n > 1 ? `step ${k + 1}/${SCENES[si].n}` : '';
+}
+
+function frame(now) {
+  const { si, k } = STEPS[cur];
+  const lt = now - enterAt;
+  const S = { k, t: animate ? lt : Infinity, lt };
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+  SCENES[si].draw(S);
+  requestAnimationFrame(frame);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const map = { ArrowRight: next, ' ': next, PageDown: next, Enter: next, ArrowLeft: prev, PageUp: prev, Backspace: prev,
+    Home: () => go(0, true), End: () => go(STEPS.length - 1, false), r: () => go(cur, true), f: toggleFs };
+  const fn = map[e.key];
+  if (!fn) return;
+  e.preventDefault();
+  if (e.repeat && (e.key === 'r' || e.key === 'f')) return;
+  fn();
+});
+document.getElementById('app').addEventListener('click', (e) => {
+  (e.clientX >= window.innerWidth / 2 ? next : prev)();
+});
+function bindBtn(id, fn) {
+  const el = document.getElementById(id);
+  // フォーカスを持たせない：Space キーでボタンが押されて二重に進むのを防ぐ
+  el.addEventListener('mousedown', (e) => e.preventDefault());
+  el.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+}
+function toggleFs() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen?.();
+}
+bindBtn('prev', prev);
+bindBtn('next', next);
+bindBtn('fs', toggleFs);
+
+const fromHash = parseInt(location.hash.slice(1), 10);
+go(Number.isFinite(fromHash) ? fromHash - 1 : 0, true);
+requestAnimationFrame(frame);
+
+// 動作確認用（ブラウザのコンソールや自動テストから参照）
+window.__deck = { go, get cur() { return cur; }, total: STEPS.length, model: M, steps: STEPS };
+</script>
+</body>
+</html>

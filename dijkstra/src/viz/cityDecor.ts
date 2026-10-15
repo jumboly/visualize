@@ -33,7 +33,8 @@ export function drawCity(under: SVGGElement, labels: SVGGElement, net: RoadNetwo
   const nb = mid(net.named.northBridge);
   text(nb.x, nb.y - 26, '北大橋');
   const ob = mid(net.named.oldBridge);
-  text(ob.x, ob.y - 26, '旧橋（幅4m・東向き一方通行）');
+  // 上に出る出発地点・店舗のタグとぶつからないよう、長い名前は橋の下に出す
+  text(ob.x, ob.y + 52, '旧橋（幅4m・東向き一方通行）');
   const fb = mid(net.named.footBridge);
   text(fb.x, fb.y - 22, '歩道橋（歩行者専用）');
   const eb = mid(net.named.expressBridge);

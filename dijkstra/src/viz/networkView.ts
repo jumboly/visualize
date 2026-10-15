@@ -198,14 +198,14 @@ export class NetworkView {
       const g = el('g', { class: `marker m-${m.kind}`, transform: `translate(${p.x},${p.y})` }, layer);
       // 道路網は縮小表示されるので、マーカーは世界座標で大きめに描く
       const big = this.style === 'road';
-      el('circle', { r: big ? 20 : 27, class: 'ring' }, g);
+      el('circle', { r: big ? 26 : 27, class: 'ring' }, g);
       if (m.label) {
         // ノード名（左上）と重ならないよう、第1章のグラフではタグをノードの下に出す
-        const dy = big ? -46 : 44;
+        const dy = big ? -62 : 44;
         const t = el('g', { class: 'tag', transform: `translate(0,${dy})` }, g);
-        const fs = big ? 28 : 15;
+        const fs = big ? 40 : 15;
         const w = [...m.label].reduce((s, ch) => s + (ch.charCodeAt(0) > 255 ? fs : fs * 0.6), 0) + fs;
-        const h = big ? 42 : 24;
+        const h = big ? 58 : 24;
         el('rect', { x: -w / 2, y: -h / 2, width: w, height: h, rx: h / 2 }, t);
         el('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': fs }, t).textContent = m.label;
       }

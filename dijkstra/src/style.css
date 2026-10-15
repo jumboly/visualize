@@ -34,6 +34,15 @@ a { color: var(--accent); }
 }
 .brand { color: var(--fg); text-decoration: none; font-size: 15px; white-space: nowrap; }
 .brand b { color: var(--accent); font-weight: 700; }
+.brand .short { display: none; }
+/* Why: ノートPCの幅でも6章すべてのタブを見せたい。タイトルを畳んで、章タブに幅を譲る */
+@media (max-width: 1720px) {
+  .brand .full { display: none; }
+  .brand .short { display: inline; color: var(--sub); }
+}
+@media (max-width: 1420px) {
+  .tabs a:not(.on) em { display: none; }
+}
 .tabs { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .tabs a {
   display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px;
@@ -103,7 +112,7 @@ button.ghost:hover { color: var(--fg); border-color: var(--faint); }
 .btn:hover { border-color: var(--faint); }
 .hint { color: var(--faint); font-size: 12px; line-height: 1.6; }
 
-.legend { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 12px; color: var(--sub); border-top: 1px solid var(--line); padding-top: 10px; }
+.legend { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 12px; color: var(--sub); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .legend .li { display: flex; align-items: center; gap: 6px; }
 .legend svg { flex: none; }
 

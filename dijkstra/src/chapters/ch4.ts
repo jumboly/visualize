@@ -418,6 +418,15 @@ export const ch4: ChapterDef = {
       { swatch: '<rect x="4" y="2" width="18" height="14" fill="#3f86d6" fill-opacity=".55"/>', label: 'メッシュ（道路と交差）' },
       { swatch: '<rect x="4" y="2" width="18" height="14" fill="none" stroke="#ffd166" stroke-width="2"/>', label: 'メッシュを統合した輪郭' },
       { swatch: '<circle cx="13" cy="9" r="7" fill="none" stroke="#ff9e7a" stroke-width="2" stroke-dasharray="3 2"/>', label: '直線距離の円' },
+      // 「店舗から／店舗へ」を重ねたときの色。キャプションだけだと読み返さないと色の意味がわからないため
+      ...([
+        ['cur', '比較：表示中の向きだけ'],
+        ['ghost', '比較：逆の向きだけ'],
+        ['both', '比較：両方で届く'],
+      ] as const).map(([k, label]) => ({
+        swatch: `<rect x="4" y="2" width="18" height="14" fill="${DIFF_COLORS[k]}"/>`,
+        label,
+      })),
     ]);
 
     setup();

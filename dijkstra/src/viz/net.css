@@ -151,8 +151,8 @@ svg.net { font-family: var(--sans); user-select: none; -webkit-user-select: none
 .park { fill: #13261d; stroke: #1f3d2c; stroke-width: 2; }
 .rail-base { stroke: #3d4352; stroke-width: 9; }
 .rail-ties { stroke: #0b0f17; stroke-width: 5; stroke-dasharray: 3 14; }
-.city-label { fill: #8b97ab; font-size: 26px; paint-order: stroke; stroke: #0b0f17; stroke-width: 6px; pointer-events: none; }
-.city-label.river-name { fill: #4f8cc0; font-size: 34px; letter-spacing: .3em; }
+.city-label { fill: #a3afc0; font-size: 36px; paint-order: stroke; stroke: #0b0f17; stroke-width: 9px; pointer-events: none; }
+.city-label.river-name { fill: #4f8cc0; font-size: 44px; letter-spacing: .3em; }
 .city-label.rail-name { fill: #7a8294; text-anchor: start; }
 .city-label.park-name { fill: #4f8a65; }
 .city-label.express-name { fill: #4fb49a; }

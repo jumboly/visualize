@@ -8,7 +8,7 @@ import { Player } from './player';
 export function startApp(root: HTMLElement, chapters: ChapterDef[]): void {
   root.innerHTML = `
     <header class="top">
-      <a class="brand" href="#/">ダイクストラ法を可視化して<b>腹に落とす</b></a>
+      <a class="brand" href="#/" title="表紙へ (0)"><span class="full">ダイクストラ法を可視化して<b>腹に落とす</b></span><span class="short">⌂ 表紙</span></a>
       <nav class="tabs">${chapters
         .map((c) => `<a href="#/${c.no}" data-no="${c.no}" title="${c.title}"><span>${c.no}</span><em>${c.title}</em></a>`)
         .join('')}</nav>
@@ -31,9 +31,9 @@ export function startApp(root: HTMLElement, chapters: ChapterDef[]): void {
         <h2 class="beat-title"></h2>
         <div class="caption"></div>
         <div class="note" aria-live="polite"></div>
+        <div class="legend"></div>
         <div class="stats"></div>
         <details class="controls-box" open><summary>操作して試す</summary><div class="controls"></div></details>
-        <div class="legend"></div>
       </aside>
     </main>
     <section class="home"></section>`;

@@ -44,6 +44,8 @@ export function startApp(root: HTMLElement, chapters: ChapterDef[]): void {
   const player = new Player();
   stageWrap.appendChild(player.el);
   const home = $('.home');
+  // 動作確認（ブラウザ自動操作）から再生位置を操作できるようにする
+  (window as unknown as { __player: Player }).__player = player;
 
   let current: { def: ChapterDef; handle: ChapterHandle; beat: number } | null = null;
 

@@ -61,6 +61,8 @@ button.ghost:hover { color: var(--fg); border-color: var(--faint); }
   border-left: 1px solid var(--line); background: var(--panel); padding: 16px 18px 24px;
   overflow-y: auto; display: flex; flex-direction: column; gap: 12px; min-height: 0;
 }
+/* 縦に溢れたときに要素が潰れて重ならないよう、縮ませずにスクロールさせる */
+.side > * { flex-shrink: 0; }
 .chap-no { color: var(--accent); font-size: 12px; letter-spacing: .1em; }
 .chap-head h1 { font-size: 21px; margin: 2px 0 4px; line-height: 1.35; }
 .chap-head .model { margin: 0; color: var(--sub); font-size: 13px; line-height: 1.6; }

@@ -1,0 +1,114 @@
+/* ===== ネットワーク描画（全章共通） =====
+ * 状態は色だけに頼らず、線種（点線・破線・実線）と太さでも区別する。 */
+
+svg.net { font-family: var(--sans); user-select: none; -webkit-user-select: none; }
+.river { fill: #123a5c; }
+.river-label { fill: #3f79a8; font-size: 18px; letter-spacing: .3em; }
+
+/* ---------- 道路 ---------- */
+.road { stroke: #2c374b; stroke-width: 3; stroke-linecap: round; }
+.net-graph .road { stroke-width: 3.5; }
+.net-graph .road.examined { stroke: #7d8db0; stroke-dasharray: 9 6; }
+.net-graph .road.bridge { stroke: #6b7a94; stroke-width: 10; stroke-linecap: butt; }
+.net-graph .road.bridge.examined { stroke: #8a9abb; stroke-dasharray: 9 6; }
+.wave { stroke: var(--wave); stroke-opacity: .62; stroke-width: 14; stroke-linecap: round; pointer-events: none; }
+.net-road .wave { stroke-width: 7; stroke-opacity: .8; }
+
+.path { fill: none; stroke: var(--accent); stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.net-road .path { stroke-width: 6; }
+.path.alt { stroke: var(--cyan); stroke-dasharray: 10 8; stroke-width: 5; }
+.path.dim { stroke-opacity: .35; }
+
+/* ---------- 重みラベル ---------- */
+.wlabel rect { fill: #0b0f17; stroke: #263248; }
+.wlabel text { fill: #9aa7b8; font-size: 14px; font-family: var(--mono); }
+
+/* ---------- ノード ---------- */
+.node { cursor: pointer; }
+.node .body { transition: fill .25s, stroke .25s; }
+.node.unreached .body { fill: #0b0f17; stroke: #56627a; stroke-width: 2; stroke-dasharray: 3 3.5; }
+.node.tentative .body { fill: #0f1a2c; stroke: #8fb8e8; stroke-width: 2.5; stroke-dasharray: 6 3.5; }
+.node.settled .body { fill: #1f4f86; stroke: #4da3ff; stroke-width: 2.5; }
+.node.current .body { stroke: #fff; stroke-width: 4.5; }
+.node .cost { font-family: var(--mono); font-size: 18px; fill: #5b6678; pointer-events: none; }
+.node.tentative .cost { fill: #cfe3ff; }
+.node.settled .cost { fill: #fff; font-weight: 700; }
+.node .name { fill: #9aa7b8; font-size: 15px; font-weight: 700; pointer-events: none; }
+.node:hover .body { stroke: var(--accent); }
+
+.net-road .node .body { stroke-width: 1 !important; stroke-dasharray: none !important; }
+.net-road .node.unreached .body { fill: #1b2333; stroke: #2c374b; }
+.net-road .node.tentative .body { fill: #0f1a2c; stroke: #8fb8e8; }
+.net-road .node.settled .body { fill: #4da3ff; stroke: #4da3ff; }
+.net-road .node.current .body { fill: #fff; stroke: #fff; }
+
+/* ---------- マーカー ---------- */
+.marker { pointer-events: none; }
+.marker .ring { fill: none; stroke-width: 4; }
+.m-start .ring { stroke: var(--green); }
+.m-goal .ring { stroke: var(--accent); stroke-dasharray: 7 4; }
+.m-target .ring { stroke: var(--accent); stroke-dasharray: 4 3; }
+.m-visit .ring { stroke: #f0a5ff; }
+.marker .tag rect { fill: #0b0f17; stroke-width: 2; }
+.marker .tag text { font-size: 14px; font-weight: 700; }
+.m-start .tag rect { stroke: var(--green); }
+.m-start .tag text { fill: var(--green); }
+.m-goal .tag rect, .m-target .tag rect { stroke: var(--accent); }
+.m-goal .tag text, .m-target .tag text { fill: var(--accent); }
+.m-visit .tag rect { stroke: #f0a5ff; }
+.m-visit .tag text { fill: #f0a5ff; }
+.net-road .marker .ring { stroke-width: 3.5; }
+.net-road .marker .tag text { font-size: 18px; }
+
+/* 目的地が確定した瞬間に一度だけ光らせる */
+.marker.reached .ring { stroke-dasharray: none; animation: reached .8s ease-out; }
+@keyframes reached { from { stroke-width: 14; } to { stroke-width: 4; } }
+
+/* ---------- 第1章の演出 ---------- */
+.probe-line { stroke: #ffffff; stroke-width: 4; stroke-linecap: round; pointer-events: none; }
+.probe-badge rect { fill: #0b0f17; stroke: #fff; stroke-width: 1.5; }
+.probe-badge text { fill: #fff; font-family: var(--mono); font-size: 16px; }
+.probe-badge.good rect { stroke: var(--accent); }
+.probe-badge.good text { fill: var(--accent); }
+.probe-badge.bad text { fill: #8b97ab; }
+.probe-badge.bad rect { stroke: #56627a; }
+.pick-ring { fill: none; stroke: #fff; stroke-width: 3; stroke-dasharray: 6 5; pointer-events: none; }
+.hist { font-family: var(--mono); font-size: 14px; fill: #8b97ab; pointer-events: none; }
+.hist .old { text-decoration: line-through; }
+.hist .arrow { fill: #56627a; }
+.straight { stroke: #9aa7b8; stroke-width: 2; stroke-dasharray: 3 7; fill: none; pointer-events: none; }
+.straight-label { fill: #9aa7b8; font-size: 15px; }
+.note-callout rect { fill: rgba(11, 15, 23, .92); stroke: #56627a; }
+.note-callout text { fill: #dbe4ef; font-size: 15px; }
+.note-callout.accent rect { stroke: var(--accent); }
+.note-callout.accent text { fill: var(--accent); }
+.detour { fill: none; stroke: #ff9e7a; stroke-width: 2.5; stroke-dasharray: 6 5; pointer-events: none; }
+.focus-ring { fill: none; stroke: var(--accent); stroke-width: 3; pointer-events: none; }
+
+/* ---------- 画面上の問いかけ・オーバーレイ ---------- */
+.stage-overlay { position: absolute; inset: 0; pointer-events: none; }
+.question {
+  position: absolute; left: 50%; top: 18px; transform: translateX(-50%); max-width: min(92%, 760px);
+  background: rgba(17, 24, 38, .95); border: 2px solid var(--accent); border-radius: 14px;
+  padding: 14px 22px; font-size: clamp(18px, 2.2vw, 30px); font-weight: 700; text-align: center; line-height: 1.5;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .5); animation: pop .35s ease-out;
+}
+.question small { display: block; font-size: .55em; font-weight: 400; color: var(--sub); margin-top: 4px; }
+@keyframes pop { from { transform: translateX(-50%) scale(.9); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
+
+.algo-card {
+  position: absolute; left: 14px; top: 14px; background: rgba(17, 24, 38, .92); border: 1px solid var(--line);
+  border-radius: 12px; padding: 10px 14px; font-size: 14px; line-height: 1.5; max-width: 320px;
+}
+.algo-card h3 { margin: 0 0 6px; font-size: 13px; color: var(--sub); font-weight: 400; }
+.algo-card ol { margin: 0; padding-left: 1.4em; }
+.algo-card li { color: #6b778a; padding: 1px 0; transition: color .2s; }
+.algo-card li.on { color: var(--fg); font-weight: 700; }
+.algo-card li.on::marker { color: var(--accent); }
+#app.present .algo-card { font-size: 17px; max-width: 380px; }
+
+@media (max-width: 900px) {
+  .algo-card { font-size: 10.5px; max-width: 58%; padding: 6px 8px; left: 6px; top: 6px; }
+  .algo-card h3 { display: none; }
+  .question { font-size: 16px; padding: 8px 12px; top: 8px; }
+}

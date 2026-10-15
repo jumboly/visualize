@@ -5,7 +5,7 @@ import { nodeId, SIMPLE_VIEWBOX, simpleGraph } from '../graph/simpleGraph';
 import { NetworkView, type Marker } from '../viz/networkView';
 import type { SearchState } from '../viz/replay';
 import { fmt } from '../viz/svg';
-import { drawSimpleRiver, makeRun, playRun, type Run } from './common';
+import { makeRun, playRun, type Run } from './common';
 import type { ChapterDef } from './types';
 
 type Kind = 'one' | 'many' | 'all';
@@ -25,7 +25,6 @@ export const ch2: ChapterDef = {
 
     host.stage.classList.add('col');
     const view = new NetworkView(host.stage, net, 'graph', SIMPLE_VIEWBOX);
-    drawSimpleRiver(view);
     const strip = document.createElement('div');
     strip.className = 'order-strip';
     host.stage.appendChild(strip);

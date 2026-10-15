@@ -1,10 +1,8 @@
 import { dijkstra, type DijkstraOptions, type DijkstraResult } from '../algo/dijkstra';
 import type { Player } from '../app/player';
 import type { SearchGraph } from '../graph/searchGraph';
-import { SIMPLE_RIVER } from '../graph/simpleGraph';
 import type { NetworkView } from '../viz/networkView';
 import { buildTimeline, frameAt, SearchReplay, type Frame, type SearchState, type Timeline, type TimelineMode } from '../viz/replay';
-import { el } from '../viz/svg';
 
 /** 1回の探索と、その再生に必要なものをまとめたもの */
 export interface Run {
@@ -49,15 +47,6 @@ export function playRun(
     },
     { at: opts.at, autoplay: opts.autoplay },
   );
-}
-
-/** 第1・2章のグラフの川 */
-export function drawSimpleRiver(view: NetworkView): void {
-  const left = SIMPLE_RIVER.map(([y, x]) => `${x},${y}`);
-  const right = [...SIMPLE_RIVER].reverse().map(([y, , x]) => `${x},${y}`);
-  const under = view.layer('under');
-  el('polygon', { points: [...left, ...right].join(' '), class: 'river' }, under);
-  el('text', { x: 628, y: 250, class: 'river-label', 'writing-mode': 'tb', 'text-anchor': 'middle' }, under).textContent = '川';
 }
 
 export function stageOverlay(stage: HTMLElement): HTMLDivElement {

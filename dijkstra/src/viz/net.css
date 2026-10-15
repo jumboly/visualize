@@ -82,6 +82,8 @@ svg.net { font-family: var(--sans); user-select: none; -webkit-user-select: none
 .note-callout text { fill: #dbe4ef; font-size: 15px; }
 .note-callout.accent rect { stroke: var(--accent); }
 .note-callout.accent text { fill: var(--accent); }
+.note-callout.alt rect { stroke: var(--cyan); }
+.note-callout.alt text { fill: var(--cyan); }
 .detour { fill: none; stroke: #ff9e7a; stroke-width: 2.5; stroke-dasharray: 6 5; pointer-events: none; }
 .focus-ring { fill: none; stroke: var(--accent); stroke-width: 3; pointer-events: none; }
 

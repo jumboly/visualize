@@ -1,11 +1,10 @@
 import { dijkstra, pathEdges, type DijkstraResult } from '../algo/dijkstra';
 import { button, hint, renderLegend, renderStats, row, segmented, SW } from '../app/ui';
 import { buildSearchGraph } from '../graph/searchGraph';
-import { nodeId, SIMPLE_VIEWBOX, simpleGraph } from '../graph/simpleGraph';
+import { DIRECT_ROUTE, nodeId, SIMPLE_VIEWBOX, simpleGraph } from '../graph/simpleGraph';
 import { NetworkView, type Marker } from '../viz/networkView';
 import { buildTimeline, easeInOut, frameAt, SearchReplay, type Frame, type SearchState, type Timeline } from '../viz/replay';
 import { el, fmt } from '../viz/svg';
-import { drawSimpleRiver } from './common';
 import type { ChapterDef } from './types';
 
 type Display = 'step' | 'wave';
@@ -31,10 +30,15 @@ export const ch1: ChapterDef = {
     const F = nodeId(net, 'F');
     const K = nodeId(net, 'K');
     const label = (v: number) => net.nodes[v].label ?? String(v);
+    // まっすぐ目的地へ向かう大通り。「目的地の方向へ進む道が最短とは限らない」ことを見せる比較用
+    const directIds = DIRECT_ROUTE.map((l) => nodeId(net, l));
+    const directEdges = directIds.slice(1).map((v, i) => g.edges.findIndex((e) => e.from === directIds[i] && e.to === v));
+    const directCosts = directEdges.map((id) => g.edges[id].cost);
+    const directTotal = directCosts.reduce((a, b) => a + b, 0);
+    const bestToB = dijkstra(g, { sources: A, targets: [B] }).dist[B];
 
     const view = new NetworkView(host.stage, net, 'graph', SIMPLE_VIEWBOX);
     view.setGraph(g);
-    drawSimpleRiver(view);
     const overlay = document.createElement('div');
     overlay.className = 'stage-overlay';
     host.stage.appendChild(overlay);
@@ -44,7 +48,7 @@ export const ch1: ChapterDef = {
     let goal: number | null = B;
     let display: Display = 'step';
     let clickRole: 'start' | 'goal' = 'start';
-    const fx = { algo: false, straight: false, focusF: false, whyMin: false, question: false };
+    const fx = { algo: false, direct: false, focusF: false, whyMin: false, question: false, compare: false };
 
     let res!: DijkstraResult;
     let replay!: SearchReplay;
@@ -87,21 +91,28 @@ export const ch1: ChapterDef = {
     }
 
     function drawPath(st: SearchState): void {
+      const paths = fx.direct ? [{ edges: directEdges, cls: 'alt' }] : [];
       if (goal !== null && st.settled[goal]) {
-        view.setPaths([{ edges: pathEdges(g, st, goal) ?? [] }]);
+        paths.push({ edges: pathEdges(g, st, goal) ?? [], cls: '' });
         view.layer('markers').querySelector('.m-goal')?.classList.add('reached');
-      } else view.setPaths([]);
+      }
+      view.setPaths(paths);
     }
 
     function drawOverlay(st: SearchState, fr: Frame): void {
       const over = view.layer('over');
       over.innerHTML = '';
-      // 直線距離（「目的地はすぐそこ」という先入観を見せる）
-      if (fx.straight && goal !== null) {
-        const a = view.pos(start);
-        const b = view.pos(goal);
-        el('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: 'straight' }, over);
-        el('text', { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 30, 'text-anchor': 'middle', class: 'straight-label' }, over).textContent = '直線ならすぐそこ';
+      // まっすぐ向かう大通り（「目的地へ向かう道が近いはず」という先入観を見せる）
+      if (fx.direct) {
+        const a = view.pos(directIds[1]);
+        const b = view.pos(directIds[2]);
+        callout(over, (a.x + b.x) / 2, a.y - 34, `まっすぐ向かう大通り ${directCosts.join('+')} = ${directTotal}`, 'alt');
+      }
+      if (fx.compare && goal !== null && st.settled[goal]) {
+        const c = view.pos(nodeId(net, 'C'));
+        const h = view.pos(nodeId(net, 'H'));
+        // 上は表示範囲の外にはみ出すので、C–H の道の下に出す（G–H の数字と重ならないよう少し左へ）
+        callout(over, (c.x + h.x) / 2 - 30, c.y + 44, `遠回りに見える道 ${fmt(st.dist[goal])}`, 'accent');
       }
       // 暫定コストの履歴（12 → 9 → 7 のように、改善の跡を残す）
       const hist = new Map<number, number[]>();
@@ -122,7 +133,9 @@ export const ch1: ChapterDef = {
         }
         if (h.length < 2) continue;
         const p = view.pos(v);
-        const txt = el('text', { x: p.x, y: p.y + 42, 'text-anchor': 'middle', class: 'hist' }, over);
+        // 出発・目的地はノードの下にタグがあるので、履歴は右上に出す
+        const tagged = v === start || v === goal;
+        const txt = el('text', tagged ? { x: p.x + 24, y: p.y - 30, class: 'hist' } : { x: p.x, y: p.y + 42, 'text-anchor': 'middle', class: 'hist' }, over);
         h.forEach((c, i) => {
           if (i) el('tspan', { class: 'arrow' }, txt).textContent = ' → ';
           el('tspan', { class: i < h.length - 1 ? 'old' : '' }, txt).textContent = fmt(c);
@@ -272,7 +285,7 @@ export const ch1: ChapterDef = {
     }
 
     function rerun(autoplay = true): void {
-      Object.assign(fx, { question: false, whyMin: false, focusF: false, straight: false });
+      Object.assign(fx, { question: false, whyMin: false, focusF: false, direct: false, compare: false });
       compute();
       load({ autoplay });
     }
@@ -281,7 +294,7 @@ export const ch1: ChapterDef = {
       start = A;
       goal = B;
       display = d;
-      Object.assign(fx, { algo: false, straight: false, focusF: false, whyMin: false, question: false });
+      Object.assign(fx, { algo: false, direct: false, focusF: false, whyMin: false, question: false, compare: false });
       dispSeg.set(display);
       compute();
     }
@@ -359,12 +372,13 @@ export const ch1: ChapterDef = {
       beats: [
         {
           title: 'A から B へ',
-          caption: `<p>出発地点 <strong>A</strong> から、目的地 <strong>B</strong> までの最短経路を探索します。</p>
-            <p>B は川の向こう。直線ならすぐそこですが、橋は北と南にしかありません。</p>
+          caption: `<p>出発地点 <strong>A</strong> から、東にある目的地 <strong>B</strong> までの最短経路を探索します。</p>
+            <p>A から B へは、まっすぐ東へ向かう大通り（<span class="c-alt">水色の破線</span>）があります。コストは ${directCosts.join(' + ')} = <strong>${directTotal}</strong>。</p>
+            <p>目的地へまっすぐ向かうこの道が、いちばん近そうに見えます。本当にそうでしょうか？</p>
             <p class="muted">道路の数字は、そこを通るコスト（たとえば所要時間）です。</p>`,
           enter() {
             reset();
-            fx.straight = true;
+            fx.direct = true;
             load();
             host.setNote('▶（Space）で探索を開始します。');
           },
@@ -375,7 +389,7 @@ export const ch1: ChapterDef = {
             <p class="muted">青く塗られていくのが「確定したコスト以内で届く道路」です。</p>`,
           enter() {
             reset();
-            fx.straight = true;
+            fx.direct = true;
             load({
               autoplay: true,
               pauseAt: afterSettleOf(K),
@@ -389,12 +403,25 @@ export const ch1: ChapterDef = {
         {
           title: '答え：B の場所は見ていない',
           caption: `<p>ダイクストラ法は、B がどの方向にあるかを<strong>見ていません</strong>。</p>
-            <p>見ているのは <strong>「A からの累積コスト」だけ</strong>。コストの小さいノードから順に確定するので、川を渡るより近い西側が先に確定します。</p>
-            <p>B が確定した瞬間に、B への最短コストと経路が決まります。直線で近づくことと、最短経路を進むことは別物です。</p>`,
+            <p>見ているのは <strong>「A からの累積コスト」だけ</strong>。コストの小さいノードから順に確定するので、B より近い西側のノードが先に確定します。</p>
+            <p>B が確定した瞬間に、B への最短コストと経路が決まります。</p>`,
           enter() {
             reset();
-            fx.straight = true;
+            fx.direct = true;
             load({ at: afterSettleOf(K), autoplay: true });
+          },
+        },
+        {
+          title: '遠回りに見えて、実は近い',
+          caption: `<p>最短経路（<strong>黄色</strong>）は、まず目的地と<strong>反対の西</strong>へ戻り、北を大きく回る道でした。コストは <strong>${fmt(bestToB)}</strong>。まっすぐの大通りは <span class="c-alt">${directTotal}</span> です。</p>
+            <p>B の暫定コストも、先に見つかった大通り経由の ${directTotal} から ${fmt(bestToB)} に書き換わってから確定しています（B の右上）。</p>
+            <p>「目的地に近づく道を選んで進む」探し方だと、最初の一歩で西へは行かないので、この道を<strong>見落とします</strong>。</p>
+            <p>ダイクストラ法は目的地の方向を見ず、<strong>全方向をコストの小さい順に</strong>調べます。だから、どう見ても遠回りな道でも、本当に近ければ確実に見つけられます。</p>`,
+          enter() {
+            reset();
+            fx.direct = true;
+            fx.compare = true;
+            load({ at: tl.duration });
           },
         },
         {
@@ -411,7 +438,7 @@ export const ch1: ChapterDef = {
         {
           title: '暫定コストは書き換わる',
           caption: `<p><strong>F</strong> の暫定コストに注目してください。</p>
-            <p>A から直接行くと <strong>12</strong>。J 経由の道が見つかると <strong>9</strong>、G 経由で <strong>7</strong> に改善されます。</p>
+            <p>A から直接行くと <strong>12</strong>。J 経由の道が見つかると <strong>9</strong>、D 経由で <strong>7</strong> に改善されます。</p>
             <p>暫定コストは「今のところの最良」。確定するまでは、もっと良い道が見つかれば書き換わります。</p>`,
           enter() {
             reset();

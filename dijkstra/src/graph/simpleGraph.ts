@@ -111,4 +111,5 @@ export const SIMPLE_RIVER: Array<[number, number, number]> = [
   [640, 598, 652],
 ];
 
-export const SIMPLE_VIEWBOX = { x: 0, y: 30, w: 1010, h: 580 };
+// 下端のノードの下に出るタグが切れないよう、下側に余白を取る
+export const SIMPLE_VIEWBOX = { x: 0, y: 30, w: 1010, h: 610 };

@@ -112,3 +112,35 @@ svg.net { font-family: var(--sans); user-select: none; -webkit-user-select: none
   .algo-card h3 { display: none; }
   .question { font-size: 16px; padding: 8px 12px; top: 8px; }
 }
+
+/* ---------- 第2章：確定順の帯・比較表 ---------- */
+.stage.col { display: flex; flex-direction: column; }
+.stage.col > svg { flex: 1; min-height: 0; height: auto; }
+.order-strip { padding: 6px 12px 10px; border-top: 1px solid var(--line); background: #0d131e; }
+.strip-head { font-size: 12px; color: var(--sub); margin-bottom: 4px; }
+.chips { display: flex; gap: 4px; padding-top: 22px; overflow-x: auto; }
+.chip {
+  position: relative; flex: 1 0 34px; max-width: 54px; text-align: center; border: 1px dashed #3a4558; border-radius: 6px;
+  padding: 2px 0; color: #5b6678; transition: background .2s;
+}
+.chip b { display: block; font-size: 15px; }
+.chip small { font-family: var(--mono); font-size: 11px; }
+.chip.on { background: #1f4f86; border: 1px solid var(--blue); color: #fff; }
+.chip.cur { box-shadow: 0 0 0 2px #fff; }
+.chip.tgt { border: 2px solid var(--accent); }
+.chip.tgt.on { background: #6b5520; }
+.chip .stops { position: absolute; left: 100%; top: -22px; bottom: -2px; border-left: 3px solid var(--accent); margin-left: 1px; z-index: 1; }
+.chip .stops .stop { display: block; white-space: nowrap; font-size: 11px; color: var(--accent); padding-left: 4px; line-height: 1.2; }
+.chip .stops .stop + .stop { display: none; }
+.chip .stops:hover .stop { display: block; }
+.compare table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+.compare th { font-weight: 400; color: var(--sub); font-size: 11px; text-align: right; }
+.compare td { padding: 3px 4px; border-top: 1px solid var(--line); text-align: right; font-family: var(--mono); }
+.compare td:first-child { text-align: left; font-family: var(--sans); }
+.compare tr.sum td { color: #ff9e7a; }
+.compare tr.hl td { color: var(--accent); font-weight: 700; }
+#app.present .compare table { font-size: 16px; }
+#app.present .chip b { font-size: 18px; }
+/* 帯の右端では印を内側に出す（はみ出して見えなくなるのを防ぐ） */
+.chip:last-child .stops { left: auto; right: -1px; border-left: 0; border-right: 3px solid var(--accent); text-align: right; }
+.chip:last-child .stops .stop { padding: 0 4px 0 0; }

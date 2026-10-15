@@ -1,10 +1,11 @@
 import { dijkstra, pathEdges, type DijkstraResult } from '../algo/dijkstra';
 import { button, hint, renderLegend, renderStats, row, segmented, SW } from '../app/ui';
 import { buildSearchGraph } from '../graph/searchGraph';
-import { nodeId, SIMPLE_RIVER, SIMPLE_VIEWBOX, simpleGraph } from '../graph/simpleGraph';
+import { nodeId, SIMPLE_VIEWBOX, simpleGraph } from '../graph/simpleGraph';
 import { NetworkView, type Marker } from '../viz/networkView';
 import { buildTimeline, easeInOut, frameAt, SearchReplay, type Frame, type SearchState, type Timeline } from '../viz/replay';
 import { el, fmt } from '../viz/svg';
+import { drawSimpleRiver } from './common';
 import type { ChapterDef } from './types';
 
 type Display = 'step' | 'wave';
@@ -33,7 +34,7 @@ export const ch1: ChapterDef = {
 
     const view = new NetworkView(host.stage, net, 'graph', SIMPLE_VIEWBOX);
     view.setGraph(g);
-    drawRiver(view);
+    drawSimpleRiver(view);
     const overlay = document.createElement('div');
     overlay.className = 'stage-overlay';
     host.stage.appendChild(overlay);
@@ -446,11 +447,3 @@ export const ch1: ChapterDef = {
     };
   },
 };
-
-function drawRiver(view: NetworkView): void {
-  const left = SIMPLE_RIVER.map(([y, x]) => `${x},${y}`);
-  const right = [...SIMPLE_RIVER].reverse().map(([y, , x]) => `${x},${y}`);
-  const under = view.layer('under');
-  el('polygon', { points: [...left, ...right].join(' '), class: 'river' }, under);
-  el('text', { x: 628, y: 250, class: 'river-label', 'writing-mode': 'tb', 'text-anchor': 'middle' }, under).textContent = '川';
-}

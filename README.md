@@ -2,6 +2,8 @@
 
 データ構造やアルゴリズムを可視化したスライドの置き場です。`index.html` から各スライドへリンクしています。
 
+公開ページ: https://jumboly.github.io/visualize/
+
 | ディレクトリ | 内容 |
 |---|---|
 | [btree-rtree/](btree-rtree/) | B-treeとR-treeを可視化してみた（なぜXYの複合インデックスでは足りないのか？） |

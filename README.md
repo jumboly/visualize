@@ -2,7 +2,7 @@
 
 データ構造やアルゴリズムを可視化したスライドの置き場です。`index.html` から各スライドへリンクしています。
 
-公開ページ: https://jumboly.github.io/visualize/
+公開ページ: https://www.jumboly.jp/visualize/
 
 | ディレクトリ | 内容 |
 |---|---|

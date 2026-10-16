@@ -1,0 +1,1143 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>値渡しなのに値が変わる？</title>
+<style>
+  :root {
+    --bg: #0a0f1c;
+    --panel: #111a2c;
+    --panel2: #0c1322;
+    --line: #22304a;
+    --fg: #e9eef6;
+    --sub: #93a1b8;
+    --mute: #5b6880;
+    --var: #4d8dff;       /* 変数の箱 */
+    --var-fill: #0f1f3d;
+    --ref: #4fd6ff;       /* 参照（#001）と、オブジェクトを指す矢印 */
+    --obj: #35c98a;       /* オブジェクト */
+    --obj-fill: #0c2419;
+    --obj-new: #86ffbe;   /* 新しく生成されたオブジェクト */
+    --alias: #ff9a3c;     /* ref による「変数への」接続 */
+    --chg: #ffd23f;       /* 変更された値 */
+    --frame: #a58bff;     /* 関数呼び出しの枠 */
+    --sans: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body {
+    font-family: var(--sans); color: var(--fg);
+    -webkit-user-select: none; user-select: none; -webkit-font-smoothing: antialiased;
+  }
+  body.idle, body.idle * { cursor: none !important; }
+  #viewport { position: fixed; inset: 0; }
+  /* 1920x1080 の固定座標で描き、ウィンドウに合わせて拡大縮小する（どの画面でも見切れないように） */
+  #stage {
+    position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden;
+    background: radial-gradient(1300px 760px at 68% 45%, #101a33 0%, var(--bg) 72%);
+  }
+  .layer { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; pointer-events: none; }
+  svg.layer { overflow: visible; }
+  #bgGrid {
+    background-image: radial-gradient(rgba(255,255,255,.045) 1.2px, transparent 1.3px);
+    background-size: 36px 36px;
+  }
+
+  /* ---------- ヘッダ ---------- */
+  #hdr {
+    position: absolute; left: 40px; right: 40px; top: 0; height: 92px;
+    display: flex; align-items: center; gap: 20px; border-bottom: 1px solid var(--line);
+  }
+  #sno { font: 800 22px var(--mono); color: #10141d; background: var(--chg); border-radius: 8px; padding: 3px 12px; }
+  #stitle { font-size: 38px; font-weight: 800; letter-spacing: .02em; white-space: nowrap; }
+  #chips { margin-left: auto; display: flex; gap: 12px; }
+  .chip {
+    font-size: 20px; font-weight: 600; padding: 6px 16px 6px 8px; border-radius: 999px;
+    border: 1.5px solid #3a4866; color: #c9d4e6; background: var(--panel2);
+    display: flex; align-items: center; gap: 10px; white-space: nowrap;
+  }
+  .chip b {
+    display: inline-flex; width: 28px; height: 28px; border-radius: 50%; align-items: center; justify-content: center;
+    background: var(--chg); color: #111; font-size: 17px; font-weight: 900;
+  }
+
+  /* ---------- コード ---------- */
+  .cblock {
+    position: absolute; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25);
+  }
+  .cblock.active { border-color: #3d5075; }
+  .clabel {
+    height: 42px; display: flex; align-items: center; padding: 0 20px; font: 600 19px var(--sans); color: var(--sub);
+    background: var(--panel2); border-bottom: 1px solid var(--line); letter-spacing: .04em; white-space: nowrap;
+  }
+  .clines { position: relative; padding: 8px 0; }
+  .ctext { position: relative; z-index: 1; font-family: var(--mono); white-space: pre; }
+  .cline { padding: 0 24px; }
+  .chl { position: absolute; left: 0; right: 0; background: rgba(255,210,63,.13); border-left: 6px solid var(--chg); z-index: 0; display: none; }
+  .tok-hl { border-radius: 6px; background: rgba(255,210,63,.3); box-shadow: 0 0 0 3px rgba(255,210,63,.3); }
+  .tk { color: #c39bff; } .tt { color: #6be0b0; } .tn { color: #fff; font-weight: 700; } .tm { color: #88b4ff; }
+  .tc { color: #66758d; } .tp { color: #8d9bb3; } .ti { color: #e9eef6; } .tr { color: var(--alias); font-weight: 800; }
+  .cfoot { height: 46px; display: flex; align-items: center; padding: 0 24px; font: 800 24px var(--sans); border-top: 1px dashed var(--line); }
+  .cfoot.obj { color: var(--obj-new); } .cfoot.var { color: #8fb7ff; }
+  #consoleBox { position: absolute; background: #060a13; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; display: none; }
+  #consoleBox .olines { padding: 10px 24px; min-height: 66px; font: 800 36px var(--mono); }
+  .oline::before { content: '> '; color: var(--mute); }
+  .oline.wait { font: 400 22px var(--sans); color: var(--mute); padding-top: 8px; }
+  .oline.wait::before { content: ''; }
+
+  /* ---------- 背景の区画（レーン・列見出し・4分割） ---------- */
+  .lane {
+    position: absolute; left: 740px; width: 1140px; border-radius: 20px;
+    background: rgba(120,150,210,.035); border: 1px solid rgba(120,150,210,.09);
+  }
+  .ltag {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 46px; display: flex; align-items: center; justify-content: center;
+    writing-mode: vertical-rl; font-size: 21px; font-weight: 700; letter-spacing: .25em; color: var(--sub);
+    border-right: 1px solid rgba(120,150,210,.09);
+  }
+  .colhead {
+    position: absolute; top: 110px; transform: translateX(-50%); font-size: 21px; font-weight: 700; color: var(--sub);
+    padding: 5px 18px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel2);
+    white-space: nowrap; letter-spacing: .06em;
+  }
+  .quad { position: absolute; border: 1px solid var(--line); border-radius: 20px; background: rgba(120,150,210,.03); }
+  .qhead { position: absolute; left: 22px; right: 16px; top: 14px; display: flex; align-items: baseline; gap: 22px; white-space: nowrap; }
+  .qtitle { font-size: 26px; font-weight: 800; }
+  .qtitle .byval { color: #8fb7ff; } .qtitle .byref { color: var(--alias); }
+  .qsig { font: 19px var(--mono); white-space: pre; }
+  .qres { position: absolute; left: 22px; top: 266px; display: flex; flex-direction: column; gap: 8px; }
+  .qr {
+    display: flex; align-items: center; gap: 10px; font: 600 20px var(--mono); padding: 4px 12px 4px 6px; border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--line); white-space: nowrap; color: var(--sub);
+  }
+  .qr .qop { font: 800 17px var(--sans); color: #10141d; background: #b9c6da; border-radius: 6px; padding: 1px 8px; }
+  .qr b { color: #fff; font-size: 26px; font-weight: 800; }
+  .qr.up b { color: var(--chg); }
+
+  /* ---------- 関数の枠 ---------- */
+  .frame { position: absolute; border: 2px dashed rgba(165,139,255,.6); border-radius: 16px; background: rgba(165,139,255,.05); }
+  .frame.done { border-color: rgba(143,157,181,.45); }
+  .ftitle { position: absolute; left: calc(14px * var(--s)); top: calc(7px * var(--s)); font: 600 calc(21px * var(--s)) var(--mono); color: #c3b2ff; white-space: nowrap; }
+  .fdone { margin-left: .5em; font: 600 .85em var(--sans); color: var(--sub); }
+
+  /* ---------- 変数とオブジェクト ---------- */
+  .node { position: absolute; transform-origin: 50% 50%; }
+  .inner { position: absolute; inset: 0; }
+  .var .box {
+    position: absolute; inset: 0; border: 3px solid var(--var); background: var(--var-fill); border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .vlabel { position: absolute; left: 4px; bottom: calc(100% + 6px); display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+  .vname { font: 800 32px var(--mono); color: #d6e4ff; }
+  .vtype { font: 500 18px var(--mono); color: var(--sub); }
+  .content { display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; }
+  .content .val { font: 800 54px var(--mono); color: #fff; }
+  .content .ref { font: 800 44px var(--mono); color: var(--ref); }
+  .content .struct { display: inline-flex; align-items: baseline; gap: 12px; font: 600 32px var(--mono); }
+  .fname { color: var(--sub); } .eq { color: var(--mute); }
+  .fv { color: #fff; font-weight: 800; display: inline-block; min-width: 1.3em; text-align: center; }
+  .fv.chg { color: var(--chg); }
+  .content .empty { display: block; width: 116px; height: 50px; border: 2px dashed rgba(77,141,255,.4); border-radius: 10px; }
+  .var.changed .content .val, .var.changed .content .ref, .chip.chg .val, .chip.chg .ref { color: var(--chg); }
+  .var.changed .box { background: #1d2234; }
+  /* ref で「別名」にされている呼び出し元の変数。オレンジの二重枠で示す */
+  .var.aliased .box { box-shadow: 0 0 0 5px var(--bg), 0 0 0 9px var(--alias); }
+  .var.shape-alias .box { border: 3px dashed var(--alias); background: rgba(255,154,60,.08); border-radius: 999px; }
+  .anote { font: 800 27px var(--sans); color: var(--alias); }
+  .card { border: 3px solid var(--obj); background: var(--obj-fill); border-radius: 16px; overflow: hidden; }
+  .obj.fresh .card { border-color: var(--obj-new); box-shadow: 0 0 28px rgba(134,255,190,.3); }
+  .ohead {
+    height: 46px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 14px;
+    background: rgba(53,201,138,.1); border-bottom: 1px solid rgba(53,201,138,.35);
+  }
+  .otype { font: 700 22px var(--mono); color: #a6f2cd; }
+  .oid { font: 700 22px var(--mono); color: var(--ref); background: rgba(79,214,255,.1); border: 1.5px solid rgba(79,214,255,.5); padding: 0 9px; border-radius: 8px; }
+  .ofield { height: 76px; display: flex; align-items: center; justify-content: center; gap: 12px; font: 600 36px var(--mono); }
+
+  /* ---------- 矢印（参照）と ref の接続 ---------- */
+  .aline { fill: none; stroke: var(--ref); stroke-linecap: round; }
+  .ahead, .adot { fill: var(--ref); }
+  .ahead, .lend { transform-box: fill-box; transform-origin: center; }
+  .moving .aline { stroke: var(--chg); } .moving .ahead, .moving .adot { fill: var(--chg); }
+  .lline { fill: none; stroke: var(--alias); stroke-linecap: round; }
+  .lstart { fill: var(--bg); stroke: var(--alias); }
+  .lend { fill: var(--alias); }
+  .lpillbg { fill: #1d1309; stroke: var(--alias); stroke-width: 2; }
+  .lpilltx { fill: var(--alias); font-family: var(--mono); font-weight: 800; }
+
+  /* ---------- 注記・大きな文字 ---------- */
+  .note {
+    position: absolute; transform: translateX(-50%); white-space: nowrap; font-size: 22px; font-weight: 700;
+    padding: 5px 14px; border-radius: 10px; border: 1.5px solid var(--line); background: rgba(17,26,44,.96); color: var(--fg);
+  }
+  .note.same { color: #c8d4e7; border-color: #55678a; }
+  .note.chg { color: #1d1600; background: var(--chg); border-color: var(--chg); }
+  .note.ref { color: var(--ref); border-color: rgba(79,214,255,.55); }
+  .note.copy { color: #fff; border-color: #8fa3c4; }
+  .note.info { color: #b4c0d3; font-weight: 600; }
+  .note .rid { font-family: var(--mono); }
+  .ov { position: absolute; transform: translate(-50%, -50%); white-space: nowrap; text-align: center; }
+  .ov.left { transform: translate(0, -50%); text-align: left; }
+  .ov.title { font-size: 112px; font-weight: 900; letter-spacing: .02em; }
+  .ov.title .hl { color: var(--chg); }
+  .ov.subtitle { font-size: 44px; font-weight: 700; color: #c4cfe0; }
+  .ov.tag { font-size: 24px; color: var(--sub); letter-spacing: .2em; padding: 8px 26px; border: 1px solid var(--line); border-radius: 999px; }
+  .ov.question { font-size: 64px; font-weight: 900; }
+  .ov.question b { color: var(--chg); font-family: var(--mono); }
+  .ov.hint { font-size: 28px; color: var(--sub); }
+  .ov.hint code { font-family: var(--mono); color: var(--alias); font-weight: 800; }
+  .ov.hint b { color: #8fb7ff; }
+  .ov.answer {
+    font-size: 58px; font-weight: 900; padding: 14px 44px; border: 3px solid var(--chg); border-radius: 22px;
+    background: rgba(10,15,28,.94); box-shadow: 0 0 60px rgba(255,210,63,.2);
+  }
+  .ov.answer b { color: var(--chg); font-family: var(--mono); }
+  .ov.big { font-size: 78px; font-weight: 900; }
+  .ov.prin { font-size: 52px; font-weight: 800; display: flex; align-items: center; gap: 24px; }
+  .ov.prin i {
+    font-style: normal; display: inline-flex; flex: none; width: 72px; height: 72px; border-radius: 50%; background: var(--chg); color: #111;
+    align-items: center; justify-content: center; font-size: 42px; font-weight: 900;
+  }
+  .ov.msg { font-size: 60px; font-weight: 900; color: var(--chg); }
+  #stage.bgmode #vizLayer { opacity: .14; filter: blur(2px); }
+
+  /* ---------- 説明文 ---------- */
+  #caption {
+    position: absolute; top: 890px; height: 108px; display: flex; align-items: center; justify-content: center; gap: 18px;
+    font-size: 36px; font-weight: 700; text-align: center; line-height: 1.3; color: #dfe7f3; padding: 0 24px;
+  }
+  #caption.layout-main { left: 740px; width: 1140px; }
+  #caption.layout-title, #caption.layout-grid { left: 40px; width: 1840px; }
+  #caption .ctext { max-width: 100%; }
+  #caption em { font-style: normal; color: var(--chg); }
+  #caption .rid { font-family: var(--mono); color: var(--ref); }
+  #caption .badge {
+    width: 60px; height: 60px; border-radius: 50%; background: var(--chg); color: #111; font-size: 34px; font-weight: 900;
+    display: inline-flex; align-items: center; justify-content: center; flex: none;
+  }
+  #caption.principle .ctext { font-size: 40px; font-weight: 900; }
+  #caption.strong .ctext { font-size: 44px; font-weight: 900; }
+
+  /* ---------- 飛んでいく値・光の点（演出専用の一時要素） ---------- */
+  .ghost { position: absolute; left: 0; top: 0; opacity: 0; pointer-events: none; will-change: transform, opacity; }
+  .chip {
+    padding: 2px 16px; border-radius: 12px; background: rgba(13,22,40,.94); border: 2px solid rgba(255,255,255,.7);
+    box-shadow: 0 8px 26px rgba(0,0,0,.5);
+  }
+  .chip.ghost { display: block; }
+  .chip.copy-ref { border-color: var(--ref); }
+  .chip.assign { border-color: var(--chg); box-shadow: 0 0 24px rgba(255,210,63,.5); }
+  .chip.assign .val, .chip.assign .ref, .chip.assign .fv { color: var(--chg); }
+  .chip.bare { background: none; border: none; box-shadow: none; padding: 0; }
+  .chip.out { border-color: var(--ref); }
+  .fvg { font-family: var(--mono); font-weight: 800; color: #fff; }
+  .dot { width: 24px; height: 24px; border-radius: 50%; }
+  .dot.write { background: var(--chg); box-shadow: 0 0 0 6px rgba(255,210,63,.25), 0 0 26px rgba(255,210,63,.9); }
+  .dot.read { background: var(--ref); box-shadow: 0 0 0 6px rgba(79,214,255,.25), 0 0 26px rgba(79,214,255,.9); }
+  .dot.alias { background: var(--alias); box-shadow: 0 0 0 6px rgba(255,154,60,.25), 0 0 26px rgba(255,154,60,.9); }
+
+  /* ---------- ナビゲーション ---------- */
+  #nav {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 70px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 28px 8px; pointer-events: none;
+  }
+  #nav button {
+    pointer-events: auto; font: 700 20px var(--sans); color: var(--sub); background: rgba(17,26,44,.75); border: 1px solid var(--line);
+    border-radius: 12px; padding: 8px 20px; cursor: pointer; opacity: .55; transition: opacity .2s, color .2s;
+  }
+  #nav button:hover { opacity: 1; color: var(--fg); }
+  #nav button.off { opacity: .15; }
+  #nav .navr { display: flex; gap: 10px; }
+  #prog { display: flex; align-items: center; gap: 16px; color: var(--mute); }
+  .pscene { display: flex; gap: 5px; align-items: center; }
+  .pnum { font: 700 14px var(--mono); margin-right: 3px; }
+  .pscene.on .pnum { color: var(--chg); }
+  .pdot { width: 9px; height: 9px; border-radius: 50%; background: #27334b; }
+  .pdot.past { background: #56637d; }
+  .pdot.on { background: var(--chg); box-shadow: 0 0 0 3px rgba(255,210,63,.22); }
+  #pcount { font: 600 15px var(--mono); margin-left: 6px; }
+</style>
+</head>
+<body>
+<div id="viewport">
+  <div id="stage">
+    <div id="bgGrid" class="layer"></div>
+    <div id="vizLayer" class="layer">
+      <div id="laneLayer" class="layer"></div>
+      <div id="frameLayer" class="layer"></div>
+      <svg id="linkSvg" class="layer" viewBox="0 0 1920 1080"><g id="linkG"></g></svg>
+      <div id="nodeLayer" class="layer"></div>
+      <div id="noteLayer" class="layer"></div>
+    </div>
+    <div id="codeLayer" class="layer"></div>
+    <div id="consoleBox"><div class="clabel">出力（Console）</div><div class="olines"></div></div>
+    <header id="hdr"><span id="sno"></span><span id="stitle"></span><div id="chips"></div></header>
+    <div id="overlayLayer" class="layer"></div>
+    <div id="caption"></div>
+    <svg id="fxSvg" class="layer" viewBox="0 0 1920 1080"><path id="sampler" d="M0,0" style="visibility:hidden"></path></svg>
+    <div id="fxLayer" class="layer"></div>
+    <nav id="nav">
+      <button id="btnPrev" type="button" tabindex="-1">‹ 戻る</button>
+      <div id="prog"></div>
+      <div class="navr">
+        <button id="btnFs" type="button" tabindex="-1" title="フルスクリーン (F)">⛶</button>
+        <button id="btnNext" type="button" tabindex="-1">次へ ›</button>
+      </div>
+    </nav>
+  </div>
+</div>
+<script src="model.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const STEPS = VR_MODEL.build();
+  const $ = id => document.getElementById(id);
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const stage = $('stage');
+  const L = {
+    lane: $('laneLayer'), frame: $('frameLayer'), linkG: $('linkG'), node: $('nodeLayer'), note: $('noteLayer'),
+    code: $('codeLayer'), ov: $('overlayLayer'), fx: $('fxLayer'), fxSvg: $('fxSvg'), viz: $('vizLayer'),
+  };
+  // model.js の座標は箱の中心。ここで大きさを決める。
+  const SIZE = { val: [210, 96], struct: [250, 112], alias: [210, 84], obj: [270, 128] };
+  const EASE = 'cubic-bezier(.45,.05,.25,1)';
+  const EASE_OUT = 'cubic-bezier(.2,.8,.2,1)';
+  const EASE_BACK = 'cubic-bezier(.3,1.55,.5,1)';
+  const REDUCED = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const CIRCLED = ['1', '2', '3'];
+
+  // ===== 小さな補助 =====
+  const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+  const sv = (tag, attrs) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs || {}) e.setAttribute(k, attrs[k]); return e; };
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const fmt = s => String(s).replace(/#\d{3}/g, m => '<span class="rid">' + m + '</span>');
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const ctr = r => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
+  const easeInOut = t => (t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+  // ===== ステージの拡大縮小 =====
+  let scale = 1;
+  function fit() {
+    const w = innerWidth, h = innerHeight;
+    scale = Math.min(w / 1920, h / 1080);
+    stage.style.transform = 'translate(' + (w - 1920 * scale) / 2 + 'px,' + (h - 1080 * scale) / 2 + 'px) scale(' + scale + ')';
+  }
+  // 画面上の位置をステージ座標に直す。演出の出発点・到着点は、すべて描画後の実際の位置から取る。
+  function srect(e) {
+    const r = e.getBoundingClientRect(), o = stage.getBoundingClientRect();
+    return { x: (r.left - o.left) / scale, y: (r.top - o.top) / scale, w: r.width / scale, h: r.height / scale };
+  }
+
+  // ===== 構文の色分け =====
+  const KW = new Set(['class', 'struct', 'public', 'void', 'new', 'int', 'return']);
+  const TYPES = new Set(['Box', 'ValueBox', 'ReferenceBox', 'Console']);
+  const METHODS = new Set(['Change', 'WriteLine']);
+  function code(line, sub) {
+    const cls = new Array(line.length).fill('');
+    const re = /(\/\/.*$)|(\b\d+\b)|([A-Za-z_]\w*)/g;
+    let m;
+    while ((m = re.exec(line))) {
+      let c;
+      if (m[1]) c = 'tc';
+      else if (m[2]) c = 'tn';
+      else c = m[3] === 'ref' ? 'tr' : KW.has(m[3]) ? 'tk' : TYPES.has(m[3]) ? 'tt' : METHODS.has(m[3]) ? 'tm' : 'ti';
+      for (let i = m.index; i < m.index + m[0].length; i++) cls[i] = c;
+    }
+    for (let i = 0; i < line.length; i++) if (!cls[i] && /[{}();=.,]/.test(line[i])) cls[i] = 'tp';
+    const hs = sub ? line.indexOf(sub) : -1, he = hs >= 0 ? hs + sub.length : -1;
+    let out = '', i = 0;
+    while (i < line.length) {
+      if (i === hs) out += '<span class="tok-hl">';
+      let j = i + 1;
+      while (j < line.length && cls[j] === cls[i] && j !== hs && j !== he) j++;
+      const t = esc(line.slice(i, j));
+      out += cls[i] ? '<span class="' + cls[i] + '">' + t + '</span>' : t;
+      if (j === he) out += '</span>';
+      i = j;
+    }
+    return out || ' ';
+  }
+  const typeHTML = t => esc(t).replace(/^ref /, '<span class="tr">ref</span> ');
+
+  function contentHTML(c, fchanged) {
+    if (!c || c.k === 'empty') return '<span class="empty"></span>';
+    if (c.k === 'val') return '<span class="val">' + esc(c.v) + '</span>';
+    if (c.k === 'ref') return '<span class="ref">' + esc(c.id) + '</span>';
+    const f = Object.keys(c.fields)[0];
+    return '<span class="struct"><span class="fname">' + f + '</span><span class="eq">=</span><span class="fv' +
+      (fchanged && fchanged[f] ? ' chg' : '') + '">' + esc(c.fields[f]) + '</span></span>';
+  }
+
+  // 「どれくらい見えるか」は状態から決まる。前後の差を演出するために数値で持つ。
+  const nodeOpacity = it => (it.dim ? .28 : it.faded ? .42 : 1);
+  const frameOpacity = f => (f.dim ? .28 : f.done ? .5 : 1);
+  const lineOpacity = a => (a.dim ? .25 : a.faded ? .38 : 1);
+  const blockOpacity = b => (b.dim ? .38 : 1);
+  const laneOpacity = l => (l.dim ? .5 : 1);
+
+  // ===== キー付き要素の差分更新 =====
+  // 同じキーの要素は作り直さずに中身と位置だけ更新する（演出中の要素を壊さないため）。
+  function sync(container, items, make, update) {
+    const old = new Map();
+    for (const c of Array.from(container.children)) if (c.dataset && c.dataset.key != null) old.set(c.dataset.key, c);
+    let prevEl = null;
+    for (const it of items) {
+      let e = old.get(it.key);
+      if (e) old.delete(it.key); else { e = make(it); e.dataset.key = it.key; }
+      update(e, it);
+      const want = prevEl ? prevEl.nextSibling : container.firstChild;
+      if (e !== want) container.insertBefore(e, want);
+      prevEl = e;
+    }
+    const removed = [];
+    for (const e of old.values()) { e.remove(); removed.push(e); }
+    return removed;
+  }
+  const byKey = c => { const m = new Map(); for (const e of c.children) if (e.dataset && e.dataset.key != null) m.set(e.dataset.key, e); return m; };
+
+  function indexStep(st) {
+    const ix = { node: new Map(), frame: new Map(), line: new Map(), note: new Map(), ov: new Map(), block: new Map(), back: new Map(), chip: new Map() };
+    st.vars.forEach(v => ix.node.set(v.key, Object.assign({ kind: 'var' }, v)));
+    st.objs.forEach(o => ix.node.set(o.key, Object.assign({ kind: 'obj' }, o)));
+    st.frames.forEach(f => ix.frame.set(f.key, f));
+    st.arrows.forEach(a => ix.line.set(a.key, Object.assign({ kind: 'arrow' }, a)));
+    st.links.forEach(l => ix.line.set(l.key, Object.assign({ kind: 'link' }, l)));
+    st.notes.forEach(n => ix.note.set(n.key, n));
+    st.overlays.forEach(o => ix.ov.set(o.key, o));
+    st.blocks.forEach(b => ix.block.set(b.key, b));
+    st.lanes.forEach(l => ix.back.set('lane:' + l.key, l));
+    st.cols.forEach(c => ix.back.set('col:' + c.key, c));
+    st.quads.forEach(q => ix.back.set('quad:' + q.key, q));
+    st.principles.forEach(p => ix.chip.set('p' + p.n + p.text, p));
+    return ix;
+  }
+  const EMPTY = {
+    scene: 0, title: '', layout: 'title', header: false, chips: false, bg: false, blocks: [], hl: null, console: null,
+    lanes: [], cols: [], quads: [], frames: [], vars: [], objs: [], arrows: [], links: [], notes: [], overlays: [],
+    caption: null, principles: [], events: [],
+  };
+  const IX = STEPS.map(indexStep);
+  const IX_EMPTY = indexStep(EMPTY);
+
+  // ===== 描画（スナップショットをそのまま DOM にする。演出は一切しない）=====
+  let E = {};       // キー → 要素
+  let G = {};       // キー → ステージ座標の矩形
+  let PATHS = {};   // 矢印・ref 接続の SVG パス（演出で経路として使う）
+
+  function render(st) {
+    const ix = IX[st.index];
+    const removed = [];
+    // ヘッダ
+    $('hdr').style.display = st.header ? '' : 'none';
+    $('sno').textContent = String(st.scene).padStart(2, '0');
+    $('stitle').textContent = st.title;
+    // チップはヘッダの flex 配置に依存するので、消えるときの演出はせずにそのまま消す
+    sync($('chips'), (st.chips ? st.principles : []).map(p => Object.assign({ key: 'p' + p.n + p.text }, p)),
+      () => el('div', 'chip'), (e, p) => { e.innerHTML = '<b>' + CIRCLED[p.n - 1] + '</b>' + esc(p.text); });
+    stage.classList.toggle('bgmode', !!st.bg);
+
+    // コード
+    removed.push(...sync(L.code, st.blocks, () => el('div', 'cblock',
+      '<div class="clabel"></div><div class="clines"><div class="chl"></div><div class="ctext"></div></div><div class="cfoot"></div>'), (e, b) => {
+      Object.assign(e.style, { left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px', fontSize: b.fs + 'px', lineHeight: b.lh + 'px', opacity: blockOpacity(b) });
+      e.querySelector('.clabel').textContent = b.label;
+      const hl = st.hl && st.hl.block === b.key ? st.hl : null;
+      const sig = JSON.stringify([b.lines, hl && hl.sub, hl && hl.lines[0]]);
+      if (e._sig !== sig) {
+        e.querySelector('.ctext').innerHTML = b.lines.map((ln, i) => '<div class="cline">' + code(ln, hl && hl.lines[0] === i ? hl.sub : null) + '</div>').join('');
+        e._sig = sig;
+      }
+      const bar = e.querySelector('.chl');
+      if (hl) Object.assign(bar.style, { display: 'block', top: (8 + hl.lines[0] * b.lh) + 'px', height: hl.lines.length * b.lh + 'px' });
+      else bar.style.display = 'none';
+      e.classList.toggle('active', !!hl);
+      const foot = e.querySelector('.cfoot');
+      foot.style.display = b.foot ? '' : 'none';
+      if (b.foot) { foot.className = 'cfoot ' + b.foot.kind; foot.textContent = b.foot.text; }
+    }));
+    const cb = $('consoleBox');
+    if (st.console) {
+      Object.assign(cb.style, { display: 'block', left: st.console.x + 'px', top: st.console.y + 'px', width: st.console.w + 'px' });
+      cb.querySelector('.olines').innerHTML = st.console.lines.length
+        ? st.console.lines.map((l, i) => '<div class="oline" data-i="' + i + '">' + esc(l) + '</div>').join('')
+        : '<div class="oline wait">（まだ何も表示されていない）</div>';
+    } else cb.style.display = 'none';
+
+    // 背景の区画
+    const back = [];
+    // 種類ごとにキーの名前空間を分ける（元の key は id として残す）
+    st.lanes.forEach(l => back.push(Object.assign({}, l, { key: 'lane:' + l.key, id: l.key, kind: 'lane' })));
+    st.cols.forEach(c => back.push(Object.assign({}, c, { key: 'col:' + c.key, id: c.key, kind: 'col' })));
+    st.quads.forEach(q => back.push(Object.assign({}, q, { key: 'quad:' + q.key, id: q.key, kind: 'quad' })));
+    removed.push(...sync(L.lane, back, it => {
+      if (it.kind === 'lane') return el('div', 'lane', '<div class="ltag"></div>');
+      if (it.kind === 'col') return el('div', 'colhead');
+      return el('div', 'quad', '<div class="qhead"><span class="qtitle"></span><span class="qsig"></span></div><div class="qres"></div>');
+    }, (e, it) => {
+      if (it.kind === 'lane') {
+        Object.assign(e.style, { top: it.y + 'px', height: it.h + 'px', opacity: laneOpacity(it) });
+        e.firstChild.textContent = it.label;
+      } else if (it.kind === 'col') {
+        e.style.left = it.x + 'px';
+        e.textContent = it.text;
+      } else {
+        Object.assign(e.style, { left: it.x + 'px', top: it.y + 'px', width: it.w + 'px', height: it.h + 'px' });
+        e.querySelector('.qtitle').innerHTML = it.title;
+        e.querySelector('.qsig').innerHTML = code(it.sig);
+        sync(e.querySelector('.qres'), it.res.map(r => Object.assign({ key: it.id + ':' + r.op }, r)), () => el('div', 'qr'), (re, r) => {
+          re.className = 'qr' + (r.v !== 10 ? ' up' : '');
+          re.innerHTML = '<span class="qop">' + r.op + '</span>a.Value →<b>' + esc(r.v) + '</b>';
+        });
+      }
+    }));
+
+    // 関数の枠
+    removed.push(...sync(L.frame, st.frames, () => el('div', 'frame', '<div class="ftitle"></div>'), (e, f) => {
+      const s = f.s;
+      Object.assign(e.style, { left: (f.x - 145 * s) + 'px', top: (f.y - 132 * s) + 'px', width: 290 * s + 'px', height: 204 * s + 'px', opacity: frameOpacity(f) });
+      e.style.setProperty('--s', s);
+      e.classList.toggle('done', f.done);
+      e.querySelector('.ftitle').innerHTML = code(f.title) + (f.done ? '<span class="fdone">終了</span>' : '');
+    }));
+
+    // 変数とオブジェクト
+    const nodes = Array.from(ix.node.values());
+    removed.push(...sync(L.node, nodes, it => {
+      if (it.kind === 'var') return el('div', 'node var', '<div class="inner"><div class="vlabel"></div><div class="box"><div class="content"></div></div></div>');
+      return el('div', 'node obj', '<div class="inner card"><div class="ohead"><span class="otype"></span><span class="oid"></span></div>' +
+        '<div class="ofield"><span class="fname"></span><span class="eq">=</span><span class="fv"></span></div></div>');
+    }, (e, it) => {
+      const sz = SIZE[it.kind === 'obj' ? 'obj' : it.shape];
+      Object.assign(e.style, { left: (it.x - sz[0] / 2) + 'px', top: (it.y - sz[1] / 2) + 'px', width: sz[0] + 'px', height: sz[1] + 'px', scale: String(it.s), opacity: nodeOpacity(it) });
+      if (it.kind === 'var') {
+        e.className = 'node var shape-' + it.shape + (it.changed ? ' changed' : '') + (it.aliased ? ' aliased' : '');
+        e.querySelector('.vlabel').innerHTML = '<span class="vname">' + esc(it.name) + '</span><span class="vtype">' + typeHTML(it.type) + '</span>';
+        const c = e.querySelector('.content');
+        const html = it.shape === 'alias' ? '<span class="anote">' + esc(it.aliasName) + ' の別名</span>' : contentHTML(it.content, it.fchanged);
+        if (c._html !== html) { c.innerHTML = html; c._html = html; }
+      } else {
+        e.className = 'node obj' + (it.fresh ? ' fresh' : '');
+        const f = Object.keys(it.fields)[0];
+        e.querySelector('.otype').textContent = it.type;
+        e.querySelector('.oid').textContent = it.id;
+        e.querySelector('.fname').textContent = f;
+        const fv = e.querySelector('.fv');
+        fv.textContent = it.fields[f];
+        fv.classList.toggle('chg', !!it.fchanged[f]);
+      }
+    }));
+
+    // 位置を測る（この時点では演出が 1 つも動いていないので、最終状態の位置が取れる）
+    E = { node: byKey(L.node), frame: byKey(L.frame), block: byKey(L.code), back: byKey(L.lane) };
+    G = { box: {}, fv: {}, oid: {}, out: [] };
+    for (const [k, e] of E.node) {
+      G.box[k] = srect(e.querySelector('.box') || e.querySelector('.card'));
+      const fv = e.querySelector('.fv'); if (fv) G.fv[k] = srect(fv);
+      const oid = e.querySelector('.oid'); if (oid) G.oid[k] = srect(oid);
+    }
+    G.out = Array.from(cb.querySelectorAll('.oline[data-i]')).map(srect);
+
+    // 矢印と ref の接続
+    PATHS = {};
+    removed.push(...sync(L.linkG, Array.from(ix.line.values()), it => (it.kind === 'arrow' ? makeArrow() : makeLink()), (g, it) => {
+      const s = ix.node.get(it.from).s;
+      if (it.kind === 'arrow') setArrow(g, arrowGeom(G.box[it.from], G.box[it.to], s), s);
+      else setLink(g, linkGeom(G.box[it.from], G.box[it.to], s), s);
+      PATHS[it.key] = g.firstChild.getAttribute('d');
+      g.style.opacity = lineOpacity(it);
+    }));
+    E.line = byKey(L.linkG);
+
+    // 注記
+    removed.push(...sync(L.note, st.notes, () => el('div', 'note'), (e, n) => {
+      const r = G.box[n.at], it = ix.node.get(n.at);
+      e.className = 'note ' + n.kind;
+      e.innerHTML = fmt(n.text);
+      e.style.left = (r.x + r.w / 2) + 'px';
+      e.style.top = (r.y + r.h + (it.kind === 'obj' ? 16 : 34) * it.s) + 'px';
+    }));
+    E.note = byKey(L.note);
+
+    // 大きな文字
+    removed.push(...sync(L.ov, st.overlays, () => el('div', 'ov'), (e, o) => {
+      e.className = 'ov ' + o.kind + (o.kind === 'prin' ? ' left' : '');
+      if (e._html !== o.html) { e.innerHTML = o.html; e._html = o.html; }
+      e.style.left = o.x + 'px'; e.style.top = o.y + 'px';
+    }));
+    E.ov = byKey(L.ov);
+
+    // 説明文
+    const cap = st.caption, c = $('caption');
+    const html = cap ? (cap.badge ? '<span class="badge">' + CIRCLED[cap.badge - 1] + '</span>' : '') + '<span class="ctext">' + fmt(cap.text) + '</span>' : '';
+    if (c._html !== html) { c.innerHTML = html; c._html = html; }
+    c.className = 'layout-' + st.layout + (cap && cap.kind ? ' ' + cap.kind : '');
+
+    renderNav();
+    return removed;
+  }
+
+  // ----- 矢印（変数 → オブジェクト）-----
+  function makeArrow() {
+    const g = sv('g', { class: 'arrow' });
+    g.append(sv('path', { class: 'aline' }), sv('polygon', { class: 'ahead' }), sv('circle', { class: 'adot' }));
+    return g;
+  }
+  function arrowGeom(vr, or, s) {
+    const right = or.x + or.w / 2 > vr.x + vr.w / 2;
+    const dir = right ? 1 : -1;
+    const x1 = right ? vr.x + vr.w : vr.x, y1 = vr.y + vr.h / 2;
+    const x2 = right ? or.x : or.x + or.w, y2 = or.y + or.h / 2;
+    const ex = x2 - dir * 16 * s;
+    const k = Math.max(30 * s, Math.abs(ex - x1) * 0.55, Math.abs(y2 - y1) * 0.4);
+    return {
+      d: 'M' + x1 + ',' + y1 + ' C' + (x1 + dir * k) + ',' + y1 + ' ' + (ex - dir * k) + ',' + y2 + ' ' + ex + ',' + y2,
+      head: [x2 + dir, y2, x2 - dir * 22 * s, y2 - 12 * s, x2 - dir * 22 * s, y2 + 12 * s].join(' '),
+      x1, y1,
+    };
+  }
+  function setArrow(g, geo, s) {
+    const [p, h, d] = g.children;
+    p.setAttribute('d', geo.d); p.style.strokeWidth = 5 * s;
+    h.setAttribute('points', geo.head);
+    d.setAttribute('cx', geo.x1); d.setAttribute('cy', geo.y1); d.setAttribute('r', 7 * s);
+  }
+
+  // ----- ref の接続（引数の名札 → 呼び出し元の変数）-----
+  // オブジェクトへの矢印と混同しないよう、色・破線・端の形・ラベル・接続先（変数の上辺）をすべて変えている。
+  function makeLink() {
+    const g = sv('g', { class: 'link' });
+    const tag = sv('g', { class: 'lpill' });
+    tag.append(sv('rect', { class: 'lpillbg', rx: 8 }), sv('text', { class: 'lpilltx', 'text-anchor': 'middle', 'dominant-baseline': 'central' }));
+    tag.lastChild.textContent = 'ref';
+    g.append(sv('path', { class: 'lline' }), sv('circle', { class: 'lstart' }), sv('polygon', { class: 'lend' }), tag);
+    return g;
+  }
+  function linkGeom(tr, vr, s) {
+    const x1 = tr.x, y1 = tr.y + tr.h / 2;
+    const x2 = vr.x + vr.w - 18 * s, y2 = vr.y;
+    const lift = (s < 1 ? 150 : 140) * s;
+    const p1 = [x1 - 60 * s, y1 - lift], p2 = [x2 + 60 * s, y2 - lift], ey = y2 - 20 * s;
+    return {
+      d: 'M' + x1 + ',' + y1 + ' C' + p1 + ' ' + p2 + ' ' + x2 + ',' + ey,
+      x1, y1, x2, y2,
+      mid: { x: (x1 + 3 * p1[0] + 3 * p2[0] + x2) / 8, y: (y1 + 3 * p1[1] + 3 * p2[1] + ey) / 8 },
+    };
+  }
+  function setLink(g, geo, s) {
+    const [p, c, d, tag] = g.children;
+    p.setAttribute('d', geo.d); p.style.strokeWidth = 5 * s; p.style.strokeDasharray = 14 * s + ' ' + 10 * s;
+    c.setAttribute('cx', geo.x1); c.setAttribute('cy', geo.y1); c.setAttribute('r', 8 * s); c.style.strokeWidth = 4 * s;
+    d.setAttribute('points', [geo.x2, geo.y2 + 1, geo.x2 - 10 * s, geo.y2 - 11 * s, geo.x2, geo.y2 - 23 * s, geo.x2 + 10 * s, geo.y2 - 11 * s].join(' '));
+    const w = 64 * s, h = 32 * s;
+    tag.firstChild.setAttribute('x', geo.mid.x - w / 2); tag.firstChild.setAttribute('y', geo.mid.y - h / 2);
+    tag.firstChild.setAttribute('width', w); tag.firstChild.setAttribute('height', h);
+    tag.lastChild.setAttribute('x', geo.mid.x); tag.lastChild.setAttribute('y', geo.mid.y + 1);
+    tag.lastChild.style.fontSize = 20 * s + 'px';
+  }
+
+  // ===== 演出の実行基盤 =====
+  // 演出はすべてここで登録し、操作のたびにまとめて止める。最終状態はすでに DOM にあるので、
+  // 止めた瞬間に正しい表示へ戻る（古いアニメーションが残って状態を壊すことがない）。
+  const FX = {
+    anims: [], ghosts: [], tweens: [], raf: 0,
+    play(e, kf, opt) { if (!e) return null; const a = e.animate(kf, opt); this.anims.push(a); return a; },
+    ghost(e, svg) { (svg ? L.fxSvg : L.fx).appendChild(e); this.ghosts.push(e); return e; },
+    tween(delay, dur, fn, end) {
+      fn(0);
+      this.tweens.push({ start: performance.now() + delay, dur, fn, end });
+      if (!this.raf) this.raf = requestAnimationFrame(tick);
+    },
+    cancel() {
+      this.anims.forEach(a => a.cancel());
+      this.ghosts.forEach(g => g.remove());
+      this.anims = []; this.ghosts = []; this.tweens = [];
+      if (this.raf) cancelAnimationFrame(this.raf);
+      this.raf = 0;
+    },
+  };
+  function tick(now) {
+    FX.raf = 0;
+    FX.tweens = FX.tweens.filter(tw => {
+      const p = clamp((now - tw.start) / tw.dur, 0, 1);
+      tw.fn(p);
+      // 本物の要素が表示されるまで少し待ってから消す（1 フレームの空白でちらつかないように）
+      if (now - tw.start > tw.dur + 60) { if (tw.end) tw.end(); return false; }
+      return true;
+    });
+    if (FX.tweens.length) FX.raf = requestAnimationFrame(tick);
+  }
+
+  function hideUntil(e, t) { if (e && t > 0) FX.play(e, [{ opacity: 0 }, { opacity: 0 }], { duration: t }); }
+  function appear(e, t, dur, dy) {
+    if (!e) return;
+    const o = e.style.opacity === '' ? 1 : +e.style.opacity;
+    FX.play(e, [{ opacity: 0, translate: '0 ' + (dy == null ? 14 : dy) + 'px' }, { opacity: o, translate: '0 0' }],
+      { duration: dur || 380, delay: t, easing: EASE_OUT, fill: 'backwards' });
+  }
+  function fadeOpacity(e, from, to, t) {
+    if (!e || from === to) return;
+    FX.play(e, [{ opacity: from }, { opacity: to }], { duration: 420, delay: t || 0, easing: 'ease', fill: 'backwards' });
+  }
+  function popAt(e, t) { FX.play(e, [{ transform: 'scale(1.35)' }, { transform: 'scale(1)' }], { duration: 340, delay: t, easing: EASE_BACK }); }
+  function flashAt(e, t, color) {
+    FX.play(e, [{ boxShadow: '0 0 0 0 ' + color }, { boxShadow: '0 0 0 18px rgba(0,0,0,0)' }], { duration: 650, delay: t, easing: 'ease-out' });
+  }
+
+  // ----- 経路 -----
+  function samplePath(d, n) {
+    const p = $('sampler');
+    p.setAttribute('d', d);
+    const len = p.getTotalLength(), pts = [];
+    for (let i = 0; i <= n; i++) { const q = p.getPointAtLength(len * i / n); pts.push({ x: q.x, y: q.y }); }
+    return pts;
+  }
+  function arcPts(a, b, lift) {
+    const c = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) - lift }, pts = [];
+    for (let i = 0; i <= 28; i++) {
+      const t = i / 28, u = 1 - t;
+      pts.push({ x: u * u * a.x + 2 * u * t * c.x + t * t * b.x, y: u * u * a.y + 2 * u * t * c.y + t * t * b.y });
+    }
+    return pts;
+  }
+  function cumulative(pts) {
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+    return cum;
+  }
+  function pointAt(pts, cum, d) {
+    let i = 1;
+    while (i < pts.length - 1 && cum[i] < d) i++;
+    const seg = cum[i] - cum[i - 1] || 1, t = clamp((d - cum[i - 1]) / seg, 0, 1);
+    return { x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t, y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * t };
+  }
+  const polyLen = pts => { const c = cumulative(pts); return c[c.length - 1]; };
+
+  // 一時要素を経路に沿って動かす。hold は出発点で「ポン」と現れて止まる時間。
+  function fly(e, pts, delay, dur, o) {
+    o = o || {};
+    const s = o.s || 1, hold = o.hold || 0, total = hold + dur;
+    const cum = cumulative(pts), len = cum[cum.length - 1];
+    const tf = (p, k) => 'translate(' + p.x + 'px,' + p.y + 'px) translate(-50%,-50%) scale(' + k + ')';
+    const kf = [];
+    if (hold) {
+      kf.push({ offset: 0, transform: tf(pts[0], s * .3) });
+      kf.push({ offset: hold / total * .6, transform: tf(pts[0], s * 1.15) });
+      kf.push({ offset: hold / total, transform: tf(pts[0], s) });
+    }
+    const n = Math.max(12, Math.round(dur / 30));
+    for (let i = hold ? 1 : 0; i <= n; i++) {
+      const t = i / n;
+      kf.push({ offset: (hold + dur * t) / total, transform: tf(pointAt(pts, cum, len * easeInOut(t)), s) });
+    }
+    FX.play(e, kf, { duration: total, delay, fill: 'backwards' });
+    FX.play(e, [{ opacity: 0 }, { opacity: 1, offset: Math.min(.15, 110 / total) }, { opacity: 1 }], { duration: total, delay, fill: 'backwards' });
+    return delay + total;
+  }
+  function chip(content, cls) { return FX.ghost(el('div', 'ghost chip ' + (cls || ''), '<div class="content">' + contentHTML(content) + '</div>')); }
+  function dot(kind) { return FX.ghost(el('div', 'ghost dot ' + kind)); }
+  // 古い中身を、指定した時間だけその場に見せておく（新しい中身が届くまでの「前の状態」）
+  function holdGhost(content, c, s, from, to, cls) {
+    const g = chip(content, 'bare ' + (cls || ''));
+    const tf = 'translate(' + c.x + 'px,' + c.y + 'px) translate(-50%,-50%) scale(' + s + ')';
+    if (to > from) FX.play(g, [{ opacity: 1, transform: tf }, { opacity: 1, transform: tf }], { delay: from, duration: to - from });
+    return { g, tf };
+  }
+
+  const boxC = k => ctr(G.box[k]);
+  const nodeOf = k => E.node.get(k);
+  const innerOf = k => nodeOf(k) && nodeOf(k).querySelector('.inner');
+  const contentOf = k => nodeOf(k) && nodeOf(k).querySelector('.content');
+  const boxOf = k => nodeOf(k) && (nodeOf(k).querySelector('.box') || nodeOf(k).querySelector('.card'));
+
+  // 矢印が伸びる（変数に参照が入ったときは必ずこの演出）
+  function drawArrow(key, t) {
+    const g = E.line.get(key);
+    if (!g) return t;
+    const [p, h, d] = g.children, len = p.getTotalLength();
+    FX.play(p, [{ strokeDasharray: len + ' ' + len, strokeDashoffset: len }, { strokeDasharray: len + ' ' + len, strokeDashoffset: 0 }],
+      { duration: 480, delay: t, easing: EASE_OUT, fill: 'backwards' });
+    FX.play(h, [{ opacity: 0, transform: 'scale(.3)' }, { opacity: 1, transform: 'scale(1)' }], { duration: 260, delay: t + 400, easing: EASE_BACK, fill: 'backwards' });
+    hideUntil(d, t);
+    return t + 660;
+  }
+  // 矢印の向き先が切り替わる（変数に別の参照が代入されたときは必ずこの演出）
+  function swingArrow(key, varKey, fromObj, toObj, t, dur, s) {
+    const real = E.line.get(key);
+    if (!real) return t;
+    hideUntil(real, t + dur + 30);
+    const g = FX.ghost(makeArrow(), true);
+    const vr = G.box[varKey], a = G.box[fromObj], b = G.box[toObj];
+    const lerp = (p) => ({ x: a.x + (b.x - a.x) * p, y: a.y + (b.y - a.y) * p, w: a.w + (b.w - a.w) * p, h: a.h + (b.h - a.h) * p });
+    FX.tween(t, dur, p => {
+      setArrow(g, arrowGeom(vr, lerp(easeInOut(p)), s), s);
+      g.classList.toggle('moving', p > 0 && p < 1);
+    }, () => g.remove());
+    return t + dur + 80;
+  }
+  function glowLink(key, t, dur) {
+    const g = E.line.get(key);
+    if (g) FX.play(g.firstChild, [{ strokeWidth: g.firstChild.style.strokeWidth }, { strokeWidth: 10 }, { strokeWidth: g.firstChild.style.strokeWidth }], { duration: dur, delay: t });
+  }
+  // 値の書き換え：古い値は上へ抜け、新しい値が下から入る
+  function flipValue(fvEl, oldVal, c, s, fs, t) {
+    const g = FX.ghost(el('div', 'ghost fvg', esc(oldVal)));
+    g.style.fontSize = fs + 'px';
+    const tf = 'translate(' + c.x + 'px,' + c.y + 'px) translate(-50%,-50%) scale(' + s + ')';
+    FX.play(g, [{ opacity: 1, transform: tf }, { opacity: 1, transform: tf }], { duration: t });
+    FX.play(g, [{ opacity: 1, transform: tf }, { opacity: 0, transform: tf + ' translateY(-44px)' }], { delay: t, duration: 380, easing: EASE });
+    hideUntil(fvEl, t);
+    FX.play(fvEl, [{ opacity: 0, transform: 'translateY(40px)' }, { opacity: 1, transform: 'none' }], { delay: t, duration: 440, easing: EASE_BACK });
+  }
+  // ref の経路（名札 → 呼び出し元の変数）を点列にする
+  function viaPts(path) {
+    let pts = [];
+    for (let i = 0; i < path.length - 1; i++) pts = pts.concat(samplePath(PATHS['lnk:' + path[i]], 36));
+    return pts;
+  }
+
+  // ===== 意味のある操作ごとの演出（同じ操作には常に同じ演出を使う）=====
+  const H = {
+    varAppear(ev, t) {
+      FX.play(innerOf(ev.key), [{ opacity: 0, transform: 'scale(.6)' }, { opacity: 1, transform: 'scale(1)' }], { duration: 420, delay: t, easing: EASE_BACK, fill: 'backwards' });
+      return t + 320;
+    },
+    objCreate(ev, t) {
+      const card = innerOf(ev.key);
+      FX.play(card, [{ opacity: 0, transform: 'scale(.4)' }, { opacity: 1, transform: 'scale(1.07)', offset: .65 }, { opacity: 1, transform: 'scale(1)' }],
+        { duration: 620, delay: t, easing: EASE_OUT, fill: 'backwards' });
+      FX.play(card, [{ boxShadow: '0 0 0 0 rgba(134,255,190,.9)' }, { boxShadow: '0 0 0 28px rgba(134,255,190,0)' }], { duration: 900, delay: t + 380 });
+      FX.play(nodeOf(ev.key).querySelector('.oid'), [{ opacity: 0, transform: 'scale(2.2)' }, { opacity: 1, transform: 'scale(1)' }],
+        { duration: 420, delay: t + 440, easing: EASE_BACK, fill: 'backwards' });
+      // 光の余韻を待たずに次の操作へ進む（ref 経由の代入などが長くなりすぎないように）
+      return t + 720;
+    },
+    frameOpen(ev, t, C) {
+      FX.play(E.frame.get(ev.key), [{ opacity: 0, transform: 'scale(.95)' }, { opacity: frameOpacity(C.nx.frame.get(ev.key)), transform: 'none' }],
+        { duration: 380, delay: t, easing: EASE_OUT, fill: 'backwards' });
+      return t + 260;
+    },
+    frameDone(ev, t, C) {
+      // 関数から戻ったら、枠とその中の引数（と、そこから出る線）を一緒に薄くする
+      fadeOpacity(E.frame.get(ev.key), frameOpacity(C.px.frame.get(ev.key)), frameOpacity(C.nx.frame.get(ev.key)), t);
+      for (const v of C.N.vars) {
+        if (v.frame !== ev.key) continue;
+        const pv = C.px.node.get(v.key);
+        if (pv) fadeOpacity(nodeOf(v.key), nodeOpacity(pv), nodeOpacity(v), t);
+        for (const k of ['arr:' + v.key, 'lnk:' + v.key]) {
+          const a = C.nx.line.get(k), pa = C.px.line.get(k);
+          if (a && pa) fadeOpacity(E.line.get(k), lineOpacity(pa), lineOpacity(a), t);
+        }
+      }
+      return t + 380;
+    },
+    // A. 値のコピー：値型でも参照型でも、箱の中身の複製が同じ軌道で飛ぶ
+    copy(ev, t, C) {
+      const to = C.nx.node.get(ev.to), s = to.s;
+      const a = boxC(ev.from), b = boxC(ev.to);
+      const FLIGHT = 820, land = t + 180 + FLIGHT;
+      FX.play(contentOf(ev.from), [{ transform: 'scale(1)' }, { transform: 'scale(1.2)', offset: .4 }, { transform: 'scale(1)' }], { duration: 420, delay: t, easing: EASE });
+      holdGhost(null, b, s, C.px.node.has(ev.to) ? 0 : t, land);
+      fly(chip(to.content, to.content.k === 'ref' ? 'copy-ref' : 'copy'), arcPts(a, b, 260 * s), t + 180, FLIGHT, { s });
+      hideUntil(contentOf(ev.to), land);
+      popAt(contentOf(ev.to), land);
+      flashAt(boxOf(ev.to), land, 'rgba(255,255,255,.7)');
+      let end = land + 220;
+      if (to.content.k === 'ref') end = drawArrow('arr:' + ev.to, end + 40);
+      return end;
+    },
+    // D. 変数への代入：新しい中身が入り、古い中身ははじき出される（ref 経由なら呼び出し元の変数まで届く）
+    assign(ev, t, C) {
+      const to = C.nx.node.get(ev.to), s = to.s;
+      const via = ev.path.slice(0, -1);
+      const B = boxC(ev.to), first = boxC(via.length ? via[0] : ev.to);
+      let pts, hold;
+      if (ev.src.kind === 'obj') { pts = arcPts(ctr(G.oid[ev.src.key]), first, 120 * s); hold = 280; }
+      else { pts = [{ x: first.x, y: first.y - 120 * s }, first]; hold = 380; }
+      if (via.length) pts = pts.concat(viaPts(ev.path), [B]);
+      const dur = clamp(polyLen(pts) * 0.85, 480, 1800);
+      fly(chip(ev.value, ev.init ? 'copy' : 'assign'), pts, t, dur, { s, hold });
+      const land = t + hold + dur;
+      if (via.length) glowLink('lnk:' + via[0], land - dur * 0.6, dur * 0.7);
+      const prev = C.px.node.get(ev.to);
+      if (ev.old && ev.old.k !== 'empty') {
+        const og = holdGhost(ev.old, B, s, 0, land, prev && prev.changed ? 'chg' : '');
+        FX.play(og.g, [{ opacity: 1, transform: og.tf }, { opacity: 0, transform: og.tf + ' translate(0,46px) rotate(-10deg)' }], { delay: land, duration: 460, easing: 'ease-in' });
+      } else if (prev) holdGhost(null, B, s, 0, land);
+      hideUntil(contentOf(ev.to), land);
+      popAt(contentOf(ev.to), land);
+      flashAt(boxOf(ev.to), land, ev.init ? 'rgba(255,255,255,.7)' : 'rgba(255,210,63,.95)');
+      let end = land + 260;
+      const oldObj = ev.old && ev.old.k === 'ref' ? ev.old.obj : null;
+      const newObj = ev.value.k === 'ref' ? ev.value.obj : null;
+      if (oldObj && newObj && oldObj !== newObj) end = swingArrow('arr:' + ev.to, ev.to, oldObj, newObj, land + 60, 720, s);
+      else if (!oldObj && newObj) end = drawArrow('arr:' + ev.to, land + 60);
+      return end;
+    },
+    // C. オブジェクト（または構造体の値）の状態変更：変数をたどった先の値だけが変わる
+    member(ev, t, C) {
+      const tgt = ev.path[ev.path.length - 1], s = C.nx.node.get(tgt).s;
+      let pts = [boxC(ev.path[0])].concat(viaPts(ev.path));
+      pts.push(boxC(tgt));
+      if (ev.obj) pts = pts.concat(samplePath(PATHS['arr:' + tgt], 30));
+      const fvRect = G.fv[ev.obj || tgt];
+      pts.push(ctr(fvRect));
+      const dur = clamp(polyLen(pts) * 0.8, 450, 1500);
+      fly(dot('write'), pts, t, dur, { hold: 200 });
+      const hit = t + 200 + dur;
+      if (ev.path.length > 1) glowLink('lnk:' + ev.path[0], t + 200, dur * 0.6);
+      const owner = ev.obj ? ev.obj : tgt;
+      flipValue(nodeOf(owner).querySelector('.fv'), ev.old, ctr(fvRect), ev.obj ? C.nx.node.get(ev.obj).s : s, ev.obj ? 36 : 32, hit);
+      flashAt(boxOf(owner), hit, 'rgba(255,210,63,.95)');
+      return hit + 480;
+    },
+    // Console.WriteLine(a.Value)：変数から参照をたどって読み、出力へ運ぶ
+    read(ev, t, C) {
+      const tgt = ev.path[ev.path.length - 1];
+      let pts = [boxC(ev.path[0])].concat(viaPts(ev.path));
+      pts.push(boxC(tgt));
+      if (ev.obj) pts = pts.concat(samplePath(PATHS['arr:' + tgt], 30));
+      const fvc = ctr(G.fv[ev.obj || tgt]);
+      pts.push(fvc);
+      const dur = clamp(polyLen(pts) * 0.9, 450, 1400);
+      fly(dot('read'), pts, t, dur, { hold: 200 });
+      const hit = t + 200 + dur;
+      FX.play(nodeOf(ev.obj || tgt).querySelector('.fv'), [{ transform: 'scale(1)' }, { transform: 'scale(1.35)' }, { transform: 'scale(1)' }], { duration: 420, delay: hit });
+      const out = G.out[ev.line];
+      const oc = { x: out.x + 60, y: out.y + out.h / 2 };
+      fly(chip({ k: 'val', v: ev.value }, 'out'), arcPts(fvc, oc, 160), hit + 180, 900, { s: .8 });
+      const land = hit + 180 + 900;
+      const line = $('consoleBox').querySelector('.oline[data-i="' + ev.line + '"]');
+      hideUntil(line, land);
+      popAt(line, land);
+      return land + 300;
+    },
+    // ref：引数の名札が現れ、呼び出し元の変数そのものにつながる（箱もコピーもない）
+    alias(ev, t, C) {
+      FX.play(innerOf(ev.key), [{ opacity: 0, transform: 'scale(.6)' }, { opacity: 1, transform: 'scale(1)' }], { duration: 420, delay: t, easing: EASE_BACK, fill: 'backwards' });
+      const g = E.line.get('lnk:' + ev.key);
+      const lo = lineOpacity(C.nx.line.get('lnk:' + ev.key));
+      FX.play(g, [{ opacity: 0 }, { opacity: lo }], { duration: 500, delay: t + 300, fill: 'backwards' });
+      fly(dot('alias'), samplePath(PATHS['lnk:' + ev.key], 40), t + 300, 760, {});
+      const hit = t + 1060;
+      FX.play(boxOf(ev.target), [{ boxShadow: '0 0 0 0 rgba(255,154,60,0)' }, { boxShadow: '0 0 0 5px #0a0f1c, 0 0 0 16px rgba(255,154,60,.9)', offset: .5 }, { boxShadow: '0 0 0 5px #0a0f1c, 0 0 0 9px #ff9a3c' }],
+        { duration: 520, delay: hit, fill: 'backwards' });
+      return hit + 420;
+    },
+    // B. 共有：2 つの変数の矢印を同時にたどると、同じオブジェクトに着く
+    pulseArrows(ev, t, C) {
+      let end = t;
+      for (const k of ev.keys) {
+        const a = C.nx.line.get(k);
+        if (!a) continue;
+        fly(dot('read'), [boxC(a.from)].concat(samplePath(PATHS[k], 30)), t, 1000, {});
+        const p = E.line.get(k).firstChild;
+        FX.play(p, [{ strokeWidth: p.style.strokeWidth }, { strokeWidth: 10 }, { strokeWidth: p.style.strokeWidth }], { duration: 1000, delay: t });
+        end = Math.max(end, t + 1000);
+      }
+      flashAt(boxOf(C.nx.line.get(ev.keys[0]).to), end, 'rgba(79,214,255,.9)');
+      return end + 400;
+    },
+  };
+
+  function collectHandled(evs, set, N) {
+    for (const ev of evs) {
+      if (ev.t === 'par') { ev.tracks.forEach(tr => collectHandled(tr, set, N)); continue; }
+      if (ev.t === 'varAppear' || ev.t === 'objCreate') set.add('node:' + ev.key);
+      if (ev.t === 'frameOpen') set.add('frame:' + ev.key);
+      if (ev.t === 'alias') { set.add('node:' + ev.key); set.add('line:lnk:' + ev.key); }
+      if (ev.t === 'copy' || ev.t === 'assign') { set.add('content:' + ev.to); set.add('line:arr:' + ev.to); }
+      if (ev.t === 'member') set.add('content:' + (ev.obj || ev.path[ev.path.length - 1]));
+      if (ev.t === 'frameDone') {
+        set.add('op:frame:' + ev.key);
+        N.vars.filter(v => v.frame === ev.key).forEach(v => { set.add('op:node:' + v.key); set.add('op:line:arr:' + v.key); set.add('op:line:lnk:' + v.key); });
+      }
+    }
+  }
+  function runEvents(evs, t, C) {
+    for (const ev of evs) {
+      if (ev.t === 'par') {
+        let end = t;
+        for (const tr of ev.tracks) end = Math.max(end, runEvents(tr, t, C));
+        t = end;
+      } else t = H[ev.t](ev, t, C) + 140;
+    }
+    return t;
+  }
+
+  // ===== 1 ステップ進んだときの演出 =====
+  function transition(P, N, px, removed) {
+    const nx = IX[N.index];
+    const C = { P, N, px, nx };
+    const handled = new Set();
+    collectHandled(N.events, handled, N);
+
+    // 消えたものは、その場で薄くして消す
+    for (const e of removed) {
+      FX.ghost(e, e instanceof SVGElement);
+      FX.play(e, [{ opacity: e.style.opacity === '' ? 1 : +e.style.opacity }, { opacity: 0 }], { duration: 320, fill: 'forwards' });
+    }
+    if (!P.header && N.header) appear($('hdr'), 0, 450, -10);
+    else if (P.title !== N.title) appear($('stitle'), 0, 450, 8);
+
+    // シーンの切り替わりで位置が変わるものは、滑らかに移動させる
+    let glide = 0;
+    const moved = new Set();
+    for (const [k, it] of nx.node) {
+      const p = px.node.get(k);
+      if (!p || (p.x === it.x && p.y === it.y && p.s === it.s)) continue;
+      FX.play(nodeOf(k), [{ translate: (p.x - it.x) + 'px ' + (p.y - it.y) + 'px', scale: String(p.s) }, { translate: '0px 0px', scale: String(it.s) }], { duration: 680, easing: EASE });
+      moved.add(k); glide = 700;
+    }
+    for (const [k, f] of nx.frame) {
+      const p = px.frame.get(k);
+      if (p && (p.x !== f.x || p.y !== f.y)) { FX.play(E.frame.get(k), [{ translate: (p.x - f.x) + 'px ' + (p.y - f.y) + 'px' }, { translate: '0px 0px' }], { duration: 680, easing: EASE }); glide = 700; }
+    }
+
+    // 新しく現れたもののうち、意味のある演出を持たないもの（状態づくり）は静かに現れる
+    let tNew = glide ? 420 : 0, anyNew = false, k2 = 0;
+    for (const [k, b] of nx.back) if (!px.back.has(k)) appear(E.back.get(k), 0, 450, 0);
+    for (const [k, b] of nx.block) if (!px.block.has(k)) appear(E.block.get(k), 60 * k2++, 450);
+    if (!P.console && N.console) appear($('consoleBox'), 120, 450);
+    for (const [k] of nx.frame) if (!px.frame.has(k) && !handled.has('frame:' + k)) { appear(E.frame.get(k), tNew, 450, 0); anyNew = true; }
+    for (const [k] of nx.node) if (!px.node.has(k) && !handled.has('node:' + k)) { appear(nodeOf(k), tNew, 450, 10); anyNew = true; }
+    for (const [k, l] of nx.line) {
+      const g = E.line.get(k);
+      if (!px.line.has(k)) { if (!handled.has('line:' + k)) { appear(g, tNew + 300, 450, 0); anyNew = true; } }
+      else if (moved.has(l.from) || moved.has(l.to)) { hideUntil(g, glide); appear(g, glide, 300, 0); }
+    }
+
+    // 見え方（強調・薄く）の切り替え
+    const op = (key, e, a, b) => { if (!handled.has('op:' + key)) fadeOpacity(e, a, b, 0); };
+    for (const [k, it] of nx.node) { const p = px.node.get(k); if (p) op('node:' + k, nodeOf(k), nodeOpacity(p), nodeOpacity(it)); }
+    for (const [k, f] of nx.frame) { const p = px.frame.get(k); if (p) op('frame:' + k, E.frame.get(k), frameOpacity(p), frameOpacity(f)); }
+    for (const [k, l] of nx.line) { const p = px.line.get(k); if (p && !moved.has(l.from)) op('line:' + k, E.line.get(k), lineOpacity(p), lineOpacity(l)); }
+    for (const [k, b] of nx.block) { const p = px.block.get(k); if (p) fadeOpacity(E.block.get(k), blockOpacity(p), blockOpacity(b), 0); }
+    for (const [k, l] of nx.back) { const p = px.back.get(k); if (p && l.dim !== p.dim) fadeOpacity(E.back.get(k), laneOpacity(p), laneOpacity(l), 0); }
+    if (!P.bg && N.bg) FX.play(L.viz, [{ opacity: 1, filter: 'blur(0px)' }, { opacity: .14, filter: 'blur(2px)' }], { duration: 800, easing: 'ease' });
+
+    // 演出なしで中身が変わったもの（初期状態へ戻す等）は、さっと入れ替える
+    for (const [k, it] of nx.node) {
+      const p = px.node.get(k);
+      if (!p || handled.has('content:' + k)) continue;
+      const a = it.kind === 'obj' ? JSON.stringify(it.fields) : JSON.stringify(it.content);
+      const b = p.kind === 'obj' ? JSON.stringify(p.fields) : JSON.stringify(p.content);
+      if (a !== b) FX.play(it.kind === 'obj' ? nodeOf(k).querySelector('.ofield') : contentOf(k), [{ opacity: 0, transform: 'scale(.7)' }, { opacity: 1, transform: 'none' }], { duration: 420, delay: glide + 100, easing: EASE_BACK, fill: 'backwards' });
+    }
+    // コードの中身が変わったブロック
+    for (const [k, b] of nx.block) {
+      const p = px.block.get(k);
+      if (p && JSON.stringify(p.lines) !== JSON.stringify(b.lines)) FX.play(E.block.get(k).querySelector('.ctext'), [{ opacity: 0 }, { opacity: 1 }], { duration: 420, delay: 80, fill: 'backwards' });
+    }
+
+    // 実行中の行のハイライト（コードが先に動き、そのあと図が動く）
+    if (N.hl) {
+      const be = E.block.get(N.hl.block), bar = be.querySelector('.chl'), b = nx.block.get(N.hl.block);
+      const pb = P.hl && P.hl.block === N.hl.block ? px.block.get(P.hl.block) : null;
+      if (pb && JSON.stringify(pb.lines) === JSON.stringify(b.lines)) {
+        const dy = (P.hl.lines[0] - N.hl.lines[0]) * b.lh;
+        if (dy) FX.play(bar, [{ transform: 'translateY(' + dy + 'px)' }, { transform: 'none' }], { duration: 320, easing: EASE });
+      } else FX.play(bar, [{ opacity: 0 }, { opacity: 1 }], { duration: 300, fill: 'backwards' });
+      const tok = be.querySelector('.tok-hl');
+      if (tok) FX.play(tok, [{ backgroundColor: 'rgba(255,210,63,0)', boxShadow: '0 0 0 0 rgba(255,210,63,0)' }, { backgroundColor: 'rgba(255,210,63,.55)', boxShadow: '0 0 0 6px rgba(255,210,63,.35)', offset: .6 }, {}], { duration: 700, delay: 120 });
+    }
+
+    // 意味のある操作
+    const t0 = Math.max(glide ? glide + 60 : 0, anyNew ? tNew + 420 : 0) + 240;
+    const tEnd = N.events.length ? runEvents(N.events, t0, C) : (glide || anyNew ? t0 - 200 : 0);
+
+    // 注記・大きな文字・結果は、操作が終わってから順に出す
+    let t = tEnd + 100;
+    for (const [k] of nx.note) if (!px.note.has(k)) { appear(E.note.get(k), t, 400, 12); t += 170; }
+    for (const [k] of nx.ov) if (!px.ov.has(k)) { appear(E.ov.get(k), t, 560, 18); t += 260; }
+    for (const q of N.quads) {
+      const pq = px.back.get('quad:' + q.key);
+      q.res.forEach(r => { if (!pq || !pq.res.some(x => x.op === r.op)) appear(E.back.get('quad:' + q.key).querySelector('[data-key="' + q.key + ':' + r.op + '"]'), t, 420, 10); });
+    }
+    for (const c of $('chips').children) if (!px.chip.has(c.dataset.key) && N.chips) FX.play(c, [{ opacity: 0, transform: 'scale(.6)' }, { opacity: 1, transform: 'scale(1)' }], { duration: 500, delay: t, easing: EASE_BACK, fill: 'backwards' });
+    if (JSON.stringify(P.caption) !== JSON.stringify(N.caption) && N.caption) appear($('caption'), 100, 450, 10);
+  }
+
+  // ===== ナビゲーション =====
+  let cur = -1;
+  function go(i, animate) {
+    i = clamp(i, 0, STEPS.length - 1);
+    if (i === cur) return;
+    FX.cancel();
+    const prev = cur;
+    cur = i;
+    const removed = render(STEPS[i]);
+    const forward = prev >= 0 ? i === prev + 1 : i === 0;
+    if (animate !== false && forward && !REDUCED) transition(prev >= 0 ? STEPS[prev] : EMPTY, STEPS[i], prev >= 0 ? IX[prev] : IX_EMPTY, removed);
+    try { history.replaceState(null, '', '#' + (i + 1)); } catch (e) { /* file:// で使えない環境もある */ }
+  }
+  // 今のステップの演出をもう一度見せる（質問されたとき用）
+  function replay() {
+    const i = cur;
+    FX.cancel();
+    if (i === 0) { cur = -1; go(0); return; }
+    cur = i - 1;
+    render(STEPS[cur]);
+    go(i);
+  }
+  function toggleFs() {
+    const d = document, de = d.documentElement;
+    if (d.fullscreenElement || d.webkitFullscreenElement) (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+    else (de.requestFullscreen || de.webkitRequestFullscreen).call(de);
+  }
+
+  function buildNav() {
+    const groups = [];
+    STEPS.forEach((st, i) => { (groups[st.scene - 1] = groups[st.scene - 1] || []).push(i); });
+    $('prog').innerHTML = groups.map((idx, si) => '<div class="pscene" data-s="' + (si + 1) + '"><span class="pnum">' + (si + 1) + '</span>' +
+      idx.map(i => '<i class="pdot" data-i="' + i + '"></i>').join('') + '</div>').join('') + '<span id="pcount"></span>';
+  }
+  function renderNav() {
+    for (const d of $('prog').querySelectorAll('.pdot')) { const i = +d.dataset.i; d.className = 'pdot' + (i === cur ? ' on' : i < cur ? ' past' : ''); }
+    for (const s of $('prog').querySelectorAll('.pscene')) s.classList.toggle('on', +s.dataset.s === STEPS[cur].scene);
+    $('pcount').textContent = (cur + 1) + ' / ' + STEPS.length;
+    $('btnPrev').classList.toggle('off', cur === 0);
+    $('btnNext').classList.toggle('off', cur === STEPS.length - 1);
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const k = e.key;
+    if (k === 'ArrowRight' || k === ' ' || k === 'PageDown' || k === 'Enter') { e.preventDefault(); go(cur + 1); }
+    else if (k === 'ArrowLeft' || k === 'PageUp' || k === 'Backspace') { e.preventDefault(); go(cur - 1); }
+    else if (k === 'Home') { e.preventDefault(); go(0, false); }
+    else if (k === 'End') { e.preventDefault(); go(STEPS.length - 1, false); }
+    else if (k === 'f' || k === 'F') toggleFs();
+    else if (k === 'r' || k === 'R') replay();
+  });
+  // 画面の左半分で戻る、右半分で進む。ボタンの上のクリックはボタン側だけで処理する。
+  $('viewport').addEventListener('click', e => {
+    if (e.target.closest('button')) return;
+    go(e.clientX < innerWidth / 2 ? cur - 1 : cur + 1);
+  });
+  [['btnPrev', () => go(cur - 1)], ['btnNext', () => go(cur + 1)], ['btnFs', toggleFs]].forEach(([id, fn]) => {
+    const b = $(id);
+    // フォーカスを持たせない：持つと Space/Enter でボタンも押され、キー操作と二重に進んでしまう
+    b.addEventListener('mousedown', e => e.preventDefault());
+    b.addEventListener('click', e => { e.stopPropagation(); fn(); });
+  });
+  // 発表中はマウスカーソルを隠す
+  let idleTimer = 0;
+  addEventListener('mousemove', () => { document.body.classList.remove('idle'); clearTimeout(idleTimer); idleTimer = setTimeout(() => document.body.classList.add('idle'), 2500); });
+  // 拡大率が変わると測った位置がずれるので、演出を止めて今のステップを描き直す
+  addEventListener('resize', () => { fit(); FX.cancel(); render(STEPS[cur]); });
+
+  fit();
+  buildNav();
+  const fromHash = () => { const h = parseInt(location.hash.slice(1), 10); return h > 0 ? h - 1 : 0; };
+  go(fromHash());
+  // URL の #番号を手で書き換えたときも、そのステップへ移動する
+  addEventListener('hashchange', () => go(fromHash(), false));
+  window.__VR = { go: (i, a) => go(i, a), get cur() { return cur; }, steps: STEPS };
+})();
+</script>
+</body>
+</html>

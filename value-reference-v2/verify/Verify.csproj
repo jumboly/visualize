@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- verify/check.js が生成する Program.cs を実行するだけのプロジェクト。
+       手元の SDK に合わせて TargetFramework を変えても動く（net8.0 以降）。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <!-- 発表用コードの構造体・クラスはフィールドを public のまま使うので、未代入警告は出さない -->
+    <NoWarn>CS0649</NoWarn>
+  </PropertyGroup>
+
+</Project>
